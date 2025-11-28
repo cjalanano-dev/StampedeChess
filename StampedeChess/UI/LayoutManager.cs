@@ -1,5 +1,6 @@
 ﻿using Spectre.Console;
 using Spectre.Console.Rendering;
+using System;
 
 namespace StampedeChess.UI
 {
@@ -68,7 +69,13 @@ namespace StampedeChess.UI
             rootLayout["Logs"].Update(logPanel);
             rootLayout["Controls"].Update(commandsPanel);
 
-            AnsiConsole.Clear();
+            try
+            {
+                Console.SetCursorPosition(0, 0);
+            } catch
+            {
+                AnsiConsole.Clear();
+            }
             AnsiConsole.Write(rootLayout);
         }
     }

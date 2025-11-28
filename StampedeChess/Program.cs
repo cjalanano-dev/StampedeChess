@@ -116,7 +116,8 @@ namespace StampedeChess
             }
         }
 
-        // Main gameloop
+        // Main gameloop 
+        // TODO: optimize the console to prevent flickering
         static void RunGame()
         {
             // fake booting (for design purpose haha)
@@ -153,21 +154,6 @@ namespace StampedeChess
                             return "ERROR: " + ex.Message;
                         }
                     });
-
-                    // Animation Loop
-                    string[] spinner = { "/", "-", "\\", "|" };
-                    int frame = 0;
-
-                    while (!botTask.IsCompleted)
-                    {
-                        var thinkingVisual = Renderer.GetVisualBoard(board);
-                        string spinnerIcon = $"[cyan]{spinner[frame]}[/]";
-
-                        LayoutManager.DrawFullScreen(thinkingVisual, logs, inputBuffer + "_", currentScore, spinnerIcon);
-
-                        Thread.Sleep(100);
-                        frame = (frame + 1) % spinner.Length;
-                    }
 
                     string botInput = botTask.Result;
 
@@ -267,7 +253,7 @@ namespace StampedeChess
 
         static void ShowGameOverScreen(string result)
         {
-            bool playerWon = result.Contains("#") || result == "Resigned"; // Basic logic
+            bool playerWon = result.Contains("#") || result == "Resigned"; // basic logic
 
             string title = "GAME OVER";
             var titleColor = Color.Gold1;

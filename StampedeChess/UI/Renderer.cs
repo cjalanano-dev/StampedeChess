@@ -97,7 +97,7 @@ namespace StampedeChess.UI
 
             for (int i = 0; i < blackBlocks; i++)
             {
-                sb.Append("[orange]█[/]\n");
+                sb.Append("[orange1]█[/]\n");
             }
             for (int i = 0; i < whiteBlocks; i++)
             {
