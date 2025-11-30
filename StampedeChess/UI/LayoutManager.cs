@@ -78,6 +78,5 @@ namespace StampedeChess.UI
             }
             AnsiConsole.Write(rootLayout);
         }
-
     }
 }

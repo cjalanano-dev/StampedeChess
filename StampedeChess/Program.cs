@@ -1,10 +1,10 @@
 ﻿using Spectre.Console;
-using StampedeChess.Core;
-using StampedeChess.UI;   
 using System;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using StampedeChess.Core;
+using StampedeChess.UI;
 
 namespace StampedeChess
 {
@@ -19,22 +19,15 @@ namespace StampedeChess
             bool appRunning = true;
             while (appRunning)
             {
-                string selectedOption = RunMenu(); 
+                string selectedOption = RunMenu();
 
                 switch (selectedOption)
                 {
-                    case "Start":
-                        RunGame();
-                        break;
-                    case "Options":
-                        RunOptions();
-                        break;
-                    case "Exit":
-                        appRunning = false;
-                        break;
+                    case "Start": RunGame(); break;
+                    case "Options": RunOptions(); break;
+                    case "Exit": appRunning = false; break;
                 }
             }
-
             Console.ResetColor();
             Console.Clear();
             Console.WriteLine("System Shutdown Complete.");
@@ -44,8 +37,6 @@ namespace StampedeChess
         {
             string[] options = { "Start", "Options", "Exit" };
             int selectedIndex = 0;
-
-            // Main Menu Title
             string titleArt = 
 @"
 ███████╗████████╗ █████╗ ███╗   ███╗██████╗ ███████╗██████╗ ███████╗
@@ -55,23 +46,14 @@ namespace StampedeChess
 ███████║   ██║   ██║  ██║██║ ╚═╝ ██║██║     ███████╗██████╔╝███████╗
 ╚══════╝   ╚═╝   ╚═╝  ╚═╝╚═╝     ╚═╝╚═╝     ╚══════╝╚═════╝ ╚══════╝
 ";
-
-            // splashes (meant to imitate the splashes on minecraft menu screen)
-            string[] splashes =
-            {
-                "Checkmate in 4!", "Written in C#!", "Console Edition!",
-                "No Mouse Required!", "Powered by Logic!", "Heavy Metal Chess!"
-            };
+            string[] splashes = { "Checkmate in 3!", "Written in C#!", "Console Edition!", "No Mouse Required!", "Powered by Logic!", "Heavy Metal Chess!" };
             string currentSplash = splashes[new Random().Next(splashes.Length)];
 
-            // layout of main menu
             while (true)
             {
                 AnsiConsole.Clear();
-
                 var logo = new Text(titleArt, new Style(Color.Cyan1)).Centered();
                 var splashText = new Text(currentSplash, new Style(Color.Yellow, decoration: Decoration.Bold)).Centered();
-
                 AnsiConsole.Write(logo);
                 AnsiConsole.Write(splashText);
                 AnsiConsole.Write(new Text("\n\n"));
@@ -94,37 +76,19 @@ namespace StampedeChess
                         menuGrid.AddRow(new Padder(btn).Padding(0, 0, 0, 1));
                     }
                 }
-
                 AnsiConsole.Write(new Align(new Panel(menuGrid).Border(BoxBorder.None), HorizontalAlignment.Center));
 
                 ConsoleKeyInfo keyInfo = Console.ReadKey(true);
-                ConsoleKey key = keyInfo.Key;
-
-                if (key == ConsoleKey.UpArrow || key == ConsoleKey.W)
-                {
-                    selectedIndex--;
-                    if (selectedIndex < 0) selectedIndex = options.Length - 1;
-                }
-                else if (key == ConsoleKey.DownArrow || key == ConsoleKey.S)
-                {
-                    selectedIndex++;
-                    if (selectedIndex >= options.Length) selectedIndex = 0;
-                }
-                else if (key == ConsoleKey.Enter)
-                {
-                    return options[selectedIndex];
-                }
+                if (keyInfo.Key == ConsoleKey.UpArrow || keyInfo.Key == ConsoleKey.W) { selectedIndex--; if (selectedIndex < 0) selectedIndex = options.Length - 1; }
+                else if (keyInfo.Key == ConsoleKey.DownArrow || keyInfo.Key == ConsoleKey.S) { selectedIndex++; if (selectedIndex >= options.Length) selectedIndex = 0; }
+                else if (keyInfo.Key == ConsoleKey.Enter) return options[selectedIndex];
             }
         }
 
-        // Main gameloop 
-        // TODO: optimize the console to prevent flickering // DONE
         static void RunGame()
         {
-            // fake booting (for design purpose haha)
             AnsiConsole.Status().Start("Booting Kernel...", ctx => { Thread.Sleep(500); });
 
-            // initialize the board and load the starting positions of pieces
             Board board = new Board();
             const string StartFEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
             board.LoadPosition(StartFEN);
@@ -137,63 +101,64 @@ namespace StampedeChess
             {
                 float currentScore = board.Evaluate();
 
-                // engine's turn to do a move
+                // --- BOT TURN ---
                 if (!board.IsWhiteToMove)
                 {
-                    // engine clones the board so it doesnt mess with the real time ui when looking up potential moves
-                    Board aiBoard = board.Clone(); // Declare aiBoard here!
-
-                    // engine runs in the bg so it doesnt freeze the program 
-                    Task<string> botTask = Task.Run(() => // FIX: Task.Run, not TaskRun
-                    {
-                        try
-                        {
-                            return StampedeChess.Core.AI.GetBestMove(aiBoard); // Use aiBoard variable
-                        }
-                        catch (Exception ex)
-                        {
-                            return "ERROR: " + ex.Message;
-                        }
+                    Board aiBoard = board.Clone();
+                    Task<string> botTask = Task.Run(() => {
+                        try { return StampedeChess.Core.AI.GetBestMove(aiBoard); }
+                        catch (Exception ex) { return "ERROR: " + ex.Message; }
                     });
+
+                    string[] spinner = { "/", "-", "\\", "|" };
+                    int frame = 0;
+
+                    while (!botTask.IsCompleted)
+                    {
+                        var thinkingVisual = Renderer.GetVisualBoard(board);
+                        string spinnerIcon = $"[cyan]{spinner[frame]}[/]";
+                        // CHANGE: Removed 'board' parameter
+                        LayoutManager.DrawFullScreen(thinkingVisual, logs, inputBuffer + "_", currentScore, spinnerIcon);
+                        Thread.Sleep(100);
+                        frame = (frame + 1) % spinner.Length;
+                    }
 
                     string botInput = botTask.Result;
 
-                    // handling of engine's inputs
                     if (botInput.StartsWith("ERROR"))
                     {
                         logs = $"System Failure: {botInput}\n" + logs;
-                        board.IsWhiteToMove = true; // skips turn to prevent infinite loop
+                        board.IsWhiteToMove = true;
                     }
                     else if (botInput == "resign")
                     {
-                        ShowGameOverScreen("Bot Resigned", true);
+                        ShowGameOverScreen("Bot Resigned", true, board);
                         gameRunning = false;
                     }
                     else
                     {
-                        // execute the move on the chessboard
                         string error;
                         string botResult = board.MakeMove(botInput, out error);
-
                         if (botResult != null)
                         {
-                            logs = $"Bot: {botResult}\n" + logs;
                             if (error == "GAME OVER")
                             {
-                                // bot caused game over -> player loses (false)
-                                ShowGameOverScreen(botResult, false);
+                                ShowGameOverScreen(botResult, false, board);
                                 gameRunning = false;
                             }
                         }
+                        else
+                        {
+                            logs = $"Bot Error: {error}\n" + logs;
+                        }
                     }
-                    continue; // restart loop to render the new board state
+                    continue;
                 }
 
-                // user turn to play
+                // --- USER TURN ---
                 var visualBoard = Renderer.GetVisualBoard(board);
                 LayoutManager.DrawFullScreen(visualBoard, logs, inputBuffer + "_", currentScore);
 
-                // handle user input
                 ConsoleKeyInfo keyInfo = Console.ReadKey(true);
 
                 if (keyInfo.Key == ConsoleKey.Enter)
@@ -201,37 +166,24 @@ namespace StampedeChess
                     if (!string.IsNullOrWhiteSpace(inputBuffer))
                     {
                         string command = inputBuffer.ToLower().Trim();
+                        if (command == "resign") { ShowGameOverScreen("Resigned", false, board); gameRunning = false; continue; }
+                        if (command == "restart") { board.LoadPosition(StartFEN); logs = "Game Reset.\n"; inputBuffer = ""; continue; }
 
-                        // commands available
-                        if (command == "resign")
-                        {
-                            ShowGameOverScreen("Resigned", false);
-                            gameRunning = false;
-                            continue; // Important: prevent falling through
-                        }
-                        if (command == "restart")
-                        {
-                            board.LoadPosition(StartFEN);
-                            logs = "Game Reset.\n";
-                            inputBuffer = "";
-                            continue;
-                        }
-
-                        // execute move on chessboard
                         string errorMsg;
                         string makeMoveResult = board.MakeMove(inputBuffer, out errorMsg);
 
                         if (makeMoveResult != null)
                         {
-                            logs = $"You: {makeMoveResult}\n" + logs;
                             inputBuffer = "";
-
                             if (errorMsg == "GAME OVER")
                             {
-                                // user caused game over = player wins (true)
-                                ShowGameOverScreen(makeMoveResult, true);
+                                ShowGameOverScreen(makeMoveResult, true, board);
                                 gameRunning = false;
                             }
+                        }
+                        else
+                        {
+                            logs = $"Error: {errorMsg}\n" + logs;
                         }
                     }
                 }
@@ -246,26 +198,58 @@ namespace StampedeChess
             }
         }
 
-        static void ShowGameOverScreen(string result, bool isPlayerWin)
+        static void ShowGameOverScreen(string result, bool isPlayerWin, Board board)
         {
-            // check the text and color based on winner
             string title = isPlayerWin ? "VICTORY" : "DEFEAT";
             var titleColor = isPlayerWin ? Color.Gold1 : Color.Red;
+            string subText = isPlayerWin
+                ? "[bold gold1]CHECKMATE! YOU WON![/]"
+                : "[bold red]CHECKMATE! ENGINE WINS![/]";
 
-            string message = isPlayerWin
-                ? "CONGRATULATIONS! YOU WON!"
-                : "THE ENGINE IS VICTORIOUS.";
+            // --- NEW LAYOUT FOR GAME OVER ---
+            var layout = new Layout("GameOver")
+                .SplitColumns(
+                    new Layout("Left").Ratio(3),
+                    new Layout("Right").Ratio(2)
+                );
+
+            // Left Side: Split into Board (Top) and History (Bottom)
+            layout["Left"].SplitRows(
+                new Layout("FinalBoard").Ratio(2),
+                new Layout("History").Ratio(1) // <--- HISTORY IS HERE NOW
+            );
+
+            // 1. Render Final Board
+            var visualBoard = Renderer.GetVisualBoard(board);
+            var boardPanel = new Panel(Align.Center(visualBoard, VerticalAlignment.Middle))
+                .Header("Final Position", Justify.Center)
+                .Border(BoxBorder.Heavy)
+                .Expand();
+
+            // 2. Render History
+            var historyPanel = Renderer.GetMoveHistoryPanel(board); // Call Renderer to get history
+
+            // 3. Render Message
+            var messageGrid = new Grid().Centered();
+            messageGrid.AddColumn();
+            messageGrid.AddRow(new FigletText(title).Color(titleColor).Centered());
+            messageGrid.AddRow(new Markup($"\n{subText}"));
+            messageGrid.AddRow(new Markup($"[white]Final Move: {result}[/]"));
+            messageGrid.AddRow(new Text("\n\n"));
+            messageGrid.AddRow(new Markup("[grey]Press ANY KEY to return to Menu...[/]"));
+
+            var messagePanel = new Panel(Align.Center(messageGrid, VerticalAlignment.Middle))
+                .Header("Game Over")
+                .Border(BoxBorder.Rounded)
+                .Expand();
+
+            // Update Layout
+            layout["FinalBoard"].Update(boardPanel);
+            layout["History"].Update(historyPanel);
+            layout["Right"].Update(messagePanel);
 
             AnsiConsole.Clear();
-
-            // draw the big title
-            AnsiConsole.Write(new FigletText(title).Color(titleColor).Centered());
-
-            // draw the details
-            AnsiConsole.Write(new Markup($"\n[bold white]Final Move: {result}[/]").Centered());
-            AnsiConsole.Write(new Markup($"\n[bold {titleColor}]{message}[/]").Centered());
-
-            AnsiConsole.Write(new Markup("\n[grey]Press ANY KEY to return to the Main Menu...[/]").Centered());
+            AnsiConsole.Write(layout);
 
             Console.ReadKey(true);
         }

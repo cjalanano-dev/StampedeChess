@@ -79,7 +79,6 @@ namespace StampedeChess.Core
                     {
                         if ((legalBitmask & (1UL << target)) != 0)
                         {
-                            // FIX: only add if move is SAFE or doesn't leave king in check
                             if (IsMoveSafe(i, target))
                             {
                                 moves.Add((i, target));
@@ -144,7 +143,9 @@ namespace StampedeChess.Core
             return count;
         }
 
-        // main move logic
+        // main move logic & store moves data
+        public List<string> MoveHistory { get; private set; } = new List<string>();
+
         public string MakeMove(string moveString, out string errorMessage)
         {
             errorMessage = "";
@@ -226,6 +227,8 @@ namespace StampedeChess.Core
                     if (IsCheckmate()) { resultNotation += "#"; errorMessage = "GAME OVER"; }
                     else { resultNotation += "+"; }
                 }
+
+                MoveHistory.Add(resultNotation);
 
                 return resultNotation;
             }
@@ -310,14 +313,14 @@ namespace StampedeChess.Core
 
         public bool IsCheckmate()
         {
-            // Checkmate = King is in check AND there are 0 legal moves
+            // checkmate IF the king is in check AND there are 0 legal moves
             bool isWhite = IsWhiteToMove;
             int kingSquare = GetKingSquare(isWhite);
 
             if (!IsSquareAttacked(kingSquare, !isWhite)) return false;
 
-            // GetAllLegalMoves now filters out moves that leave king in check.
-            // So if count is 0, it is mate.
+            // the method GetAllLegalMoves() now filters out moves that leave king in check.
+            // and if count is 0, it is mate.
             var validMoves = GetAllLegalMoves();
             return validMoves.Count == 0;
         }
