@@ -62,7 +62,7 @@ namespace StampedeChess.UI
                 table.AddRow(cells.ToArray());
             }
 
-            // Bottom Labels
+            // bottom labels on the board
             var bottomLabels = new List<IRenderable> { new Text("") };
             char[] files = { 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h' };
             foreach (var f in files)

@@ -46,14 +46,15 @@ namespace StampedeChess
             int selectedIndex = 0;
 
             // Main Menu Title
-            string titleArt = @"
-                 ███████╗████████╗ █████╗ ███╗   ███╗██████╗ ███████╗██████╗ ███████╗
-                 ██╔════╝╚══██╔══╝██╔══██╗████╗ ████║██╔══██╗██╔════╝██╔══██╗██╔════╝
-                 ███████╗   ██║   ███████║██╔████╔██║██████╔╝█████╗  ██║  ██║█████╗  
-                 ╚════██║   ██║   ██╔══██║██║╚██╔╝██║██╔═══╝ ██╔══╝  ██║  ██║██╔══╝  
-                 ███████║   ██║   ██║  ██║██║ ╚═╝ ██║██║     ███████╗██████╔╝███████╗
-                 ╚══════╝   ╚═╝   ╚═╝  ╚═╝╚═╝     ╚═╝╚═╝     ╚══════╝╚═════╝ ╚══════╝
-                ";
+            string titleArt = 
+@"
+███████╗████████╗ █████╗ ███╗   ███╗██████╗ ███████╗██████╗ ███████╗
+██╔════╝╚══██╔══╝██╔══██╗████╗ ████║██╔══██╗██╔════╝██╔══██╗██╔════╝
+███████╗   ██║   ███████║██╔████╔██║██████╔╝█████╗  ██║  ██║█████╗  
+╚════██║   ██║   ██╔══██║██║╚██╔╝██║██╔═══╝ ██╔══╝  ██║  ██║██╔══╝  
+███████║   ██║   ██║  ██║██║ ╚═╝ ██║██║     ███████╗██████╔╝███████╗
+╚══════╝   ╚═╝   ╚═╝  ╚═╝╚═╝     ╚═╝╚═╝     ╚══════╝╚═════╝ ╚══════╝
+";
 
             // splashes (meant to imitate the splashes on minecraft menu screen)
             string[] splashes =
@@ -117,7 +118,7 @@ namespace StampedeChess
         }
 
         // Main gameloop 
-        // TODO: optimize the console to prevent flickering
+        // TODO: optimize the console to prevent flickering // DONE
         static void RunGame()
         {
             // fake booting (for design purpose haha)
@@ -165,8 +166,8 @@ namespace StampedeChess
                     }
                     else if (botInput == "resign")
                     {
-                        logs = "Bot Resigns. You Win!\n" + logs;
-                        // Handle win condition if needed
+                        ShowGameOverScreen("Bot Resigned", true);
+                        gameRunning = false;
                     }
                     else
                     {
@@ -176,16 +177,13 @@ namespace StampedeChess
 
                         if (botResult != null)
                         {
-                            logs = $"Bot:  {botResult}\n" + logs;
+                            logs = $"Bot: {botResult}\n" + logs;
                             if (error == "GAME OVER")
                             {
-                                ShowGameOverScreen(botResult);
+                                // bot caused game over -> player loses (false)
+                                ShowGameOverScreen(botResult, false);
                                 gameRunning = false;
                             }
-                        }
-                        else
-                        {
-                            logs = $"Bot Error: {error}\n" + logs;
                         }
                     }
                     continue; // restart loop to render the new board state
@@ -207,7 +205,7 @@ namespace StampedeChess
                         // commands available
                         if (command == "resign")
                         {
-                            ShowGameOverScreen("Resigned");
+                            ShowGameOverScreen("Resigned", false);
                             gameRunning = false;
                             continue; // Important: prevent falling through
                         }
@@ -225,18 +223,15 @@ namespace StampedeChess
 
                         if (makeMoveResult != null)
                         {
-                            logs = $"You:  {makeMoveResult}\n" + logs;
+                            logs = $"You: {makeMoveResult}\n" + logs;
                             inputBuffer = "";
 
                             if (errorMsg == "GAME OVER")
                             {
-                                ShowGameOverScreen(makeMoveResult);
+                                // user caused game over = player wins (true)
+                                ShowGameOverScreen(makeMoveResult, true);
                                 gameRunning = false;
                             }
-                        }
-                        else
-                        {
-                            logs = $"Error: {errorMsg}\n" + logs;
                         }
                     }
                 }
@@ -251,19 +246,26 @@ namespace StampedeChess
             }
         }
 
-        static void ShowGameOverScreen(string result)
+        static void ShowGameOverScreen(string result, bool isPlayerWin)
         {
-            bool playerWon = result.Contains("#") || result == "Resigned"; // basic logic
+            // check the text and color based on winner
+            string title = isPlayerWin ? "VICTORY" : "DEFEAT";
+            var titleColor = isPlayerWin ? Color.Gold1 : Color.Red;
 
-            string title = "GAME OVER";
-            var titleColor = Color.Gold1;
+            string message = isPlayerWin
+                ? "CONGRATULATIONS! YOU WON!"
+                : "THE ENGINE IS VICTORIOUS.";
 
             AnsiConsole.Clear();
 
+            // draw the big title
             AnsiConsole.Write(new FigletText(title).Color(titleColor).Centered());
 
-            AnsiConsole.Write(new Markup($"\nResult: {result}").Centered());
-            AnsiConsole.Write(new Markup("\nPress ANY KEY to return to the Main Menu...").Centered());
+            // draw the details
+            AnsiConsole.Write(new Markup($"\n[bold white]Final Move: {result}[/]").Centered());
+            AnsiConsole.Write(new Markup($"\n[bold {titleColor}]{message}[/]").Centered());
+
+            AnsiConsole.Write(new Markup("\n[grey]Press ANY KEY to return to the Main Menu...[/]").Centered());
 
             Console.ReadKey(true);
         }
