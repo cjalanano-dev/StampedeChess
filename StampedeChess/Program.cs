@@ -37,16 +37,15 @@ namespace StampedeChess
         {
             string[] options = { "Start", "Options", "Exit" };
             int selectedIndex = 0;
-            string titleArt = 
-@"
+            string titleArt = @"
 ███████╗████████╗ █████╗ ███╗   ███╗██████╗ ███████╗██████╗ ███████╗
 ██╔════╝╚══██╔══╝██╔══██╗████╗ ████║██╔══██╗██╔════╝██╔══██╗██╔════╝
 ███████╗   ██║   ███████║██╔████╔██║██████╔╝█████╗  ██║  ██║█████╗  
 ╚════██║   ██║   ██╔══██║██║╚██╔╝██║██╔═══╝ ██╔══╝  ██║  ██║██╔══╝  
 ███████║   ██║   ██║  ██║██║ ╚═╝ ██║██║     ███████╗██████╔╝███████╗
 ╚══════╝   ╚═╝   ╚═╝  ╚═╝╚═╝     ╚═╝╚═╝     ╚══════╝╚═════╝ ╚══════╝
-";
-            string[] splashes = { "Checkmate in 3!", "Written in C#!", "Console Edition!", "No Mouse Required!", "Powered by Logic!", "Heavy Metal Chess!" };
+                ";
+            string[] splashes = { "Checkmate in 4!", "Written in C#!", "Console Edition!", "No Mouse Required!", "Powered by Logic!", "Heavy Metal Chess!" };
             string currentSplash = splashes[new Random().Next(splashes.Length)];
 
             while (true)
@@ -87,6 +86,7 @@ namespace StampedeChess
 
         static void RunGame()
         {
+            // fake booting sequence
             AnsiConsole.Status().Start("Booting Kernel...", ctx => { Thread.Sleep(500); });
 
             Board board = new Board();
@@ -101,10 +101,12 @@ namespace StampedeChess
             {
                 float currentScore = board.Evaluate();
 
-                // --- BOT TURN ---
+                // bot turn logic
                 if (!board.IsWhiteToMove)
                 {
                     Board aiBoard = board.Clone();
+
+                    // run ai in background
                     Task<string> botTask = Task.Run(() => {
                         try { return StampedeChess.Core.AI.GetBestMove(aiBoard); }
                         catch (Exception ex) { return "ERROR: " + ex.Message; }
@@ -113,11 +115,11 @@ namespace StampedeChess
                     string[] spinner = { "/", "-", "\\", "|" };
                     int frame = 0;
 
+                    // animation loop
                     while (!botTask.IsCompleted)
                     {
                         var thinkingVisual = Renderer.GetVisualBoard(board);
                         string spinnerIcon = $"[cyan]{spinner[frame]}[/]";
-                        // CHANGE: Removed 'board' parameter
                         LayoutManager.DrawFullScreen(thinkingVisual, logs, inputBuffer + "_", currentScore, spinnerIcon);
                         Thread.Sleep(100);
                         frame = (frame + 1) % spinner.Length;
@@ -125,6 +127,7 @@ namespace StampedeChess
 
                     string botInput = botTask.Result;
 
+                    // handle bot output
                     if (botInput.StartsWith("ERROR"))
                     {
                         logs = $"System Failure: {botInput}\n" + logs;
@@ -141,6 +144,8 @@ namespace StampedeChess
                         string botResult = board.MakeMove(botInput, out error);
                         if (botResult != null)
                         {
+                            logs = $"Bot: {botResult}\n" + logs;
+
                             if (error == "GAME OVER")
                             {
                                 ShowGameOverScreen(botResult, false, board);
@@ -155,7 +160,7 @@ namespace StampedeChess
                     continue;
                 }
 
-                // --- USER TURN ---
+                // user turn logic
                 var visualBoard = Renderer.GetVisualBoard(board);
                 LayoutManager.DrawFullScreen(visualBoard, logs, inputBuffer + "_", currentScore);
 
@@ -166,15 +171,20 @@ namespace StampedeChess
                     if (!string.IsNullOrWhiteSpace(inputBuffer))
                     {
                         string command = inputBuffer.ToLower().Trim();
+
+                        // system commands
                         if (command == "resign") { ShowGameOverScreen("Resigned", false, board); gameRunning = false; continue; }
                         if (command == "restart") { board.LoadPosition(StartFEN); logs = "Game Reset.\n"; inputBuffer = ""; continue; }
 
+                        // execute move
                         string errorMsg;
                         string makeMoveResult = board.MakeMove(inputBuffer, out errorMsg);
 
                         if (makeMoveResult != null)
                         {
+                            logs = $"You: {makeMoveResult}\n" + logs;
                             inputBuffer = "";
+
                             if (errorMsg == "GAME OVER")
                             {
                                 ShowGameOverScreen(makeMoveResult, true, board);
@@ -206,30 +216,29 @@ namespace StampedeChess
                 ? "[bold gold1]CHECKMATE! YOU WON![/]"
                 : "[bold red]CHECKMATE! ENGINE WINS![/]";
 
-            // --- NEW LAYOUT FOR GAME OVER ---
+            // results layout
             var layout = new Layout("GameOver")
                 .SplitColumns(
                     new Layout("Left").Ratio(3),
                     new Layout("Right").Ratio(2)
                 );
 
-            // Left Side: Split into Board (Top) and History (Bottom)
             layout["Left"].SplitRows(
                 new Layout("FinalBoard").Ratio(2),
-                new Layout("History").Ratio(1) // <--- HISTORY IS HERE NOW
+                new Layout("History").Ratio(1)
             );
 
-            // 1. Render Final Board
+            // final board state
             var visualBoard = Renderer.GetVisualBoard(board);
             var boardPanel = new Panel(Align.Center(visualBoard, VerticalAlignment.Middle))
                 .Header("Final Position", Justify.Center)
                 .Border(BoxBorder.Heavy)
                 .Expand();
 
-            // 2. Render History
-            var historyPanel = Renderer.GetMoveHistoryPanel(board); // Call Renderer to get history
+            // match history
+            var historyPanel = Renderer.GetMoveHistoryPanel(board);
 
-            // 3. Render Message
+            // result message
             var messageGrid = new Grid().Centered();
             messageGrid.AddColumn();
             messageGrid.AddRow(new FigletText(title).Color(titleColor).Centered());
@@ -243,7 +252,7 @@ namespace StampedeChess
                 .Border(BoxBorder.Rounded)
                 .Expand();
 
-            // Update Layout
+            // updates
             layout["FinalBoard"].Update(boardPanel);
             layout["History"].Update(historyPanel);
             layout["Right"].Update(messagePanel);

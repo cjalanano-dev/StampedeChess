@@ -1,6 +1,6 @@
 ﻿using System;
-using System.CodeDom.Compiler;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text;
 
 namespace StampedeChess.Core
@@ -10,59 +10,121 @@ namespace StampedeChess.Core
         public ulong[] Bitboards { get; private set; }
         public bool IsWhiteToMove { get; set; }
 
+        // castling rights (bitmask: 1=WK, 2=WQ, 4=BK, 8=BQ)
+        public int CastlingRights { get; set; }
+
         public Board()
         {
             Bitboards = new ulong[12];
+            CastlingRights = 15; // 1111 (all allowed start)
             MoveTables.Init();
         }
 
-        // returns true if the move is legal and doesn't leave king in check
-        private bool IsMoveSafe(int from, int to)
-        {
-            // rember state
-            bool wasWhiteTurn = IsWhiteToMove;
-
-            // make the move
-            (int captured, int moved) = MakeMoveFast(from, to);
-
-            // check if the king is under attack
-            int myKingSq = GetKingSquare(wasWhiteTurn);
-
-            bool isSelfCheck = IsSquareAttacked(myKingSq, IsWhiteToMove);
-
-            // undo the move
-            UnmakeMoveFast(from, to, captured, moved);
-
-            return !isSelfCheck;
-        }
-
-        // ai move logic
-        public (int captured, int moved) MakeMoveFast(int from, int to)
+        // optimized ai helpers
+        // updated to return oldCastlingRights so we can undo properly
+        public (int captured, int moved, int oldRights) MakeMoveFast(int from, int to)
         {
             int movingPiece = GetPieceAtSquare(from);
             int targetPiece = GetPieceAtSquare(to);
+            int oldRights = CastlingRights; // save state
 
-            if (movingPiece == -1) return (-1, -1);
+            if (movingPiece == -1) return (-1, -1, oldRights);
 
-            if (targetPiece != -1) Bitboards[targetPiece] &= ~(1UL << to);
+            // capture
+            if (targetPiece != -1)
+            {
+                Bitboards[targetPiece] &= ~(1UL << to);
 
+                // if rook captured, remove opponent castling right
+                if (targetPiece == 3 || targetPiece == 9) UpdateCastlingRights(to);
+            }
+
+            // move piece
             Bitboards[movingPiece] &= ~(1UL << from);
             Bitboards[movingPiece] |= (1UL << to);
 
+            // castling logic (king moves 2 squares)
+            // white king (index 5) from e1(4) to g1(6) or c1(2)
+            if (movingPiece == 5 && Math.Abs(to - from) == 2)
+            {
+                if (to == 6) // white short
+                {
+                    Bitboards[3] &= ~(1UL << 7); // remove rook h1
+                    Bitboards[3] |= (1UL << 5);  // place rook f1
+                }
+                else if (to == 2) // white long
+                {
+                    Bitboards[3] &= ~(1UL << 0); // remove rook a1
+                    Bitboards[3] |= (1UL << 3);  // place rook d1
+                }
+            }
+            // black king (index 11) from e8(60) to g8(62) or c8(58)
+            else if (movingPiece == 11 && Math.Abs(to - from) == 2)
+            {
+                if (to == 62) // black short
+                {
+                    Bitboards[9] &= ~(1UL << 63); // remove rook h8
+                    Bitboards[9] |= (1UL << 61);  // place rook f8
+                }
+                else if (to == 58) // black long
+                {
+                    Bitboards[9] &= ~(1UL << 56); // remove rook a8
+                    Bitboards[9] |= (1UL << 59);  // place rook d8
+                }
+            }
+
+            // update rights if king or rook moved
+            UpdateCastlingRights(from);
+
             IsWhiteToMove = !IsWhiteToMove;
 
-            return (targetPiece, movingPiece);
+            return (targetPiece, movingPiece, oldRights);
         }
 
-        public void UnmakeMoveFast(int from, int to, int capturedPiece, int movingPiece)
+        public void UnmakeMoveFast(int from, int to, int capturedPiece, int movingPiece, int oldRights)
         {
             if (movingPiece == -1) return;
             IsWhiteToMove = !IsWhiteToMove;
 
+            // restore rights
+            CastlingRights = oldRights;
+
+            // move piece back
             Bitboards[movingPiece] &= ~(1UL << to);
             Bitboards[movingPiece] |= (1UL << from);
 
+            // restore captured
             if (capturedPiece != -1) Bitboards[capturedPiece] |= (1UL << to);
+
+            // un-castle (move rook back)
+            if (movingPiece == 5 && Math.Abs(to - from) == 2)
+            {
+                if (to == 6) { Bitboards[3] &= ~(1UL << 5); Bitboards[3] |= (1UL << 7); }
+                if (to == 2) { Bitboards[3] &= ~(1UL << 3); Bitboards[3] |= (1UL << 0); }
+            }
+            if (movingPiece == 11 && Math.Abs(to - from) == 2)
+            {
+                if (to == 62) { Bitboards[9] &= ~(1UL << 61); Bitboards[9] |= (1UL << 63); }
+                if (to == 58) { Bitboards[9] &= ~(1UL << 59); Bitboards[9] |= (1UL << 56); }
+            }
+        }
+
+        // helper to strip rights
+        private void UpdateCastlingRights(int square)
+        {
+            // if king or rook moves/captured, strip the bit
+            // white
+            if (square == 4 || square == 60) // kings
+            {
+                if (square == 4) CastlingRights &= ~3; // strip white both
+                if (square == 60) CastlingRights &= ~12; // strip black both
+            }
+
+            // rooks
+            if (square == 0) CastlingRights &= ~2; // strip white queen
+            if (square == 7) CastlingRights &= ~1; // strip white king
+            if (square == 56) CastlingRights &= ~8; // strip black queen
+            if (square == 63) CastlingRights &= ~4; // strip black king
         }
 
         public List<(int From, int To)> GetAllLegalMoves()
@@ -77,13 +139,7 @@ namespace StampedeChess.Core
                     ulong legalBitmask = MoveGenerator.GetPseudoLegalMoves(i, piece, this);
                     for (int target = 0; target < 64; target++)
                     {
-                        if ((legalBitmask & (1UL << target)) != 0)
-                        {
-                            if (IsMoveSafe(i, target))
-                            {
-                                moves.Add((i, target));
-                            }
-                        }
+                        if ((legalBitmask & (1UL << target)) != 0) moves.Add((i, target));
                     }
                 }
             }
@@ -97,6 +153,7 @@ namespace StampedeChess.Core
             Board newBoard = new Board();
             Array.Copy(this.Bitboards, newBoard.Bitboards, 12);
             newBoard.IsWhiteToMove = this.IsWhiteToMove;
+            newBoard.CastlingRights = this.CastlingRights; // clone rights
             return newBoard;
         }
 
@@ -134,7 +191,6 @@ namespace StampedeChess.Core
             return score;
         }
 
-        // trailing zero count helper
         private int TrailingZeroCount(ulong value)
         {
             if (value == 0) return 64;
@@ -143,19 +199,31 @@ namespace StampedeChess.Core
             return count;
         }
 
-        // main move logic & store moves data
-        public List<string> MoveHistory { get; private set; } = new List<string>();
-
+        // main move logic
         public string MakeMove(string moveString, out string errorMessage)
         {
+
             errorMessage = "";
             if (string.IsNullOrWhiteSpace(moveString)) { errorMessage = "Empty input."; return null; }
 
             string rawInput = moveString.Trim();
+
+            string lowerInput = rawInput.ToLower().Replace("0", "o");
+
+            if (lowerInput == "o-o") // short castle (king side)
+            {
+                rawInput = IsWhiteToMove ? "e1g1" : "e8g8";
+            }
+            else if (lowerInput == "o-o-o") // long castle (queen side)
+            {
+                rawInput = IsWhiteToMove ? "e1c1" : "e8c8";
+            }
+
             char firstChar = rawInput[0];
             string stringToParse = char.IsUpper(firstChar) ? rawInput.Substring(1) : rawInput;
-            string cleanMove = stringToParse.Replace("-", "").Replace("x", "").ToLower();
+            bool inputHasCapture = rawInput.Contains('x');
 
+            string cleanMove = stringToParse.Replace("-", "").Replace("x", "").ToLower();
             string coordsOnly = "";
             foreach (char c in cleanMove)
             {
@@ -187,23 +255,39 @@ namespace StampedeChess.Core
                 ulong legalMoves = MoveGenerator.GetPseudoLegalMoves(fromIndex, movingPieceType, this);
                 if ((legalMoves & (1UL << toIndex)) == 0) { errorMessage = "Illegal Move (Geometry)."; return null; }
 
-                // we simulate the move 
-                // if king is in check after move
-                // then illegal
+                // safety check
                 if (!IsMoveSafe(fromIndex, toIndex))
                 {
                     errorMessage = "Illegal Move: King is in check (or pinned).";
                     return null;
                 }
 
-                // executes move
+                // execute actual move
+                int oldRights = CastlingRights;
+
                 if (isCapture) Bitboards[targetPieceType] &= ~(1UL << toIndex);
                 Bitboards[movingPieceType] &= ~(1UL << fromIndex);
                 Bitboards[movingPieceType] |= (1UL << toIndex);
 
+                // handle castling rook move in main logic too
+                if (movingPieceType == 5 && Math.Abs(toIndex - fromIndex) == 2)
+                {
+                    if (toIndex == 6) { Bitboards[3] &= ~(1UL << 7); Bitboards[3] |= (1UL << 5); }
+                    if (toIndex == 2) { Bitboards[3] &= ~(1UL << 0); Bitboards[3] |= (1UL << 3); }
+                }
+                if (movingPieceType == 11 && Math.Abs(toIndex - fromIndex) == 2)
+                {
+                    if (toIndex == 62) { Bitboards[9] &= ~(1UL << 63); Bitboards[9] |= (1UL << 61); }
+                    if (toIndex == 58) { Bitboards[9] &= ~(1UL << 56); Bitboards[9] |= (1UL << 59); }
+                }
+
+                // update rights
+                UpdateCastlingRights(fromIndex);
+                UpdateCastlingRights(toIndex); // also update if rook captured
+
                 IsWhiteToMove = !IsWhiteToMove;
 
-                // logs formatting
+                // log formatting
                 char pieceChar = '?';
                 switch (movingPieceType)
                 {
@@ -216,8 +300,16 @@ namespace StampedeChess.Core
                 }
                 bool isPawn = (movingPieceType == 0 || movingPieceType == 6);
                 string prefix = isPawn ? "" : pieceChar.ToString();
-                string captureMark = isCapture ? "x" : "";
-                string resultNotation = string.Format("{0}{1}{2}{3}", prefix, coordsOnly.Substring(0, 2), captureMark, coordsOnly.Substring(2, 2));
+
+                // check if castling for log
+                string resultNotation;
+                if (movingPieceType == 5 && Math.Abs(toIndex - fromIndex) == 2) resultNotation = (toIndex == 6) ? "0-0" : "0-0-0";
+                else if (movingPieceType == 11 && Math.Abs(toIndex - fromIndex) == 2) resultNotation = (toIndex == 62) ? "0-0" : "0-0-0";
+                else
+                {
+                    string captureMark = isCapture ? "x" : "";
+                    resultNotation = string.Format("{0}{1}{2}{3}", prefix, coordsOnly.Substring(0, 2), captureMark, coordsOnly.Substring(2, 2));
+                }
 
                 int enemyKingSq = GetKingSquare(IsWhiteToMove);
                 bool isCheck = IsSquareAttacked(enemyKingSq, !IsWhiteToMove);
@@ -228,6 +320,7 @@ namespace StampedeChess.Core
                     else { resultNotation += "+"; }
                 }
 
+                // save history
                 MoveHistory.Add(resultNotation);
 
                 return resultNotation;
@@ -235,7 +328,19 @@ namespace StampedeChess.Core
             catch { errorMessage = "System Error."; return null; }
         }
 
-        // helper methods
+        // king safety helper
+        private bool IsMoveSafe(int from, int to)
+        {
+            bool wasWhiteTurn = IsWhiteToMove;
+            (int captured, int moved, int oldRights) = MakeMoveFast(from, to);
+            int myKingSq = GetKingSquare(wasWhiteTurn);
+            bool isSelfCheck = IsSquareAttacked(myKingSq, IsWhiteToMove);
+            UnmakeMoveFast(from, to, captured, moved, oldRights);
+            return !isSelfCheck;
+        }
+
+        public List<string> MoveHistory { get; private set; } = new List<string>();
+
         public ulong GetWhitePieces() => Bitboards[0] | Bitboards[1] | Bitboards[2] | Bitboards[3] | Bitboards[4] | Bitboards[5];
         public ulong GetBlackPieces() => Bitboards[6] | Bitboards[7] | Bitboards[8] | Bitboards[9] | Bitboards[10] | Bitboards[11];
         public ulong GetAllPieces() => GetWhitePieces() | GetBlackPieces();
@@ -243,8 +348,11 @@ namespace StampedeChess.Core
         public void LoadPosition(string fen)
         {
             Array.Clear(Bitboards, 0, 12);
+            MoveHistory.Clear();
             string[] sections = fen.Split(' ');
             string boardLayout = sections[0];
+
+            // load pieces
             int rank = 7;
             int file = 0;
             foreach (char symbol in boardLayout)
@@ -260,6 +368,17 @@ namespace StampedeChess.Core
                 }
             }
             IsWhiteToMove = (sections.Length > 1 && sections[1] == "w");
+
+            // load castling rights (kqkq)
+            CastlingRights = 0;
+            if (sections.Length > 2)
+            {
+                string rights = sections[2];
+                if (rights.Contains("K")) CastlingRights |= 1;
+                if (rights.Contains("Q")) CastlingRights |= 2;
+                if (rights.Contains("k")) CastlingRights |= 4;
+                if (rights.Contains("q")) CastlingRights |= 8;
+            }
         }
 
         public int GetPieceAtSquare(int squareIndex)
@@ -313,26 +432,17 @@ namespace StampedeChess.Core
 
         public bool IsCheckmate()
         {
-            // checkmate IF the king is in check AND there are 0 legal moves
             bool isWhite = IsWhiteToMove;
             int kingSquare = GetKingSquare(isWhite);
-
             if (!IsSquareAttacked(kingSquare, !isWhite)) return false;
-
-            // the method GetAllLegalMoves() now filters out moves that leave king in check.
-            // and if count is 0, it is mate.
-            var validMoves = GetAllLegalMoves();
-            return validMoves.Count == 0;
+            var moves = GetAllLegalMoves();
+            return moves.Count == 0;
         }
 
         public void MovePiece(int from, int to)
         {
-            int movingPiece = GetPieceAtSquare(from);
-            int targetPiece = GetPieceAtSquare(to);
-            if (targetPiece != -1) Bitboards[targetPiece] &= ~(1UL << to);
-            Bitboards[movingPiece] &= ~(1UL << from);
-            Bitboards[movingPiece] |= (1UL << to);
-            IsWhiteToMove = !IsWhiteToMove;
+            // helper mostly for debug/testing
+            MakeMoveFast(from, to);
         }
 
         public string IndexToString(int index) => string.Format("{0}{1}", (char)('a' + (index % 8)), (char)('1' + (index / 8)));
@@ -356,7 +466,6 @@ namespace StampedeChess.Core
                 default: throw new Exception("Invalid Symbol");
             }
         }
-
         private char GetNotationChar(int p)
         {
             switch (p)
