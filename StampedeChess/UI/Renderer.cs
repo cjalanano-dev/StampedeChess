@@ -108,24 +108,21 @@ namespace StampedeChess.UI
             string barContent = sb.ToString().TrimEnd('\n');
 
             return new Panel(new Markup(barContent))
-                .Border(BoxBorder.None) // invisible border so it looks like a floating strip
+                .Border(BoxBorder.None) 
                 .Padding(0, 0);
         }
 
         public static Panel GetMoveHistoryPanel(Board board)
         {
             var sb = new StringBuilder();
-            var history = board.MoveHistory;
+            var history = board.MoveHistory;    
 
-            // loop through moves 2 at a time (White + Black)
             for (int i = 0; i < history.Count; i += 2)
             {
                 int moveNumber = (i / 2) + 1;
                 string whiteMove = history[i];
                 string blackMove = (i + 1 < history.Count) ? history[i + 1] : "";
 
-                // format: "1. e4 e5" like normal chess
-                // we use colors to distinguish them
                 sb.Append($"[grey]{moveNumber}.[/] [green]{whiteMove}[/] ");
 
                 if (!string.IsNullOrEmpty(blackMove))
@@ -133,7 +130,6 @@ namespace StampedeChess.UI
                     sb.Append($"[orange1]{blackMove}[/] ");
                 }
 
-                // add a newline every 2 moves to keep it compact
                 if (moveNumber % 2 == 0) sb.Append("\n");
             }
 

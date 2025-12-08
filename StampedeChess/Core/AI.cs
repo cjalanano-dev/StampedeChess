@@ -17,18 +17,14 @@ namespace StampedeChess.Core
 
             foreach (var move in moves)
             {
-                // do: now captures old castling rights too
                 var undoInfo = board.MakeMoveFast(move.From, move.To);
-
                 if (undoInfo.moved == -1) continue;
 
-                // recurse
                 int moveVal = Minimax(board, SearchDepth - 1, int.MinValue, int.MaxValue, !board.IsWhiteToMove);
 
-                // undo: pass the rights back
-                board.UnmakeMoveFast(move.From, move.To, undoInfo.captured, undoInfo.moved, undoInfo.oldRights);
+                // undo: pass the oldEP back
+                board.UnmakeMoveFast(move.From, move.To, undoInfo.captured, undoInfo.moved, undoInfo.oldRights, undoInfo.oldEP);
 
-                // compare
                 if (board.IsWhiteToMove)
                 {
                     if (moveVal > bestVal) { bestVal = moveVal; bestMove = move; }
@@ -62,7 +58,7 @@ namespace StampedeChess.Core
 
                     int eval = Minimax(board, depth - 1, alpha, beta, false);
 
-                    board.UnmakeMoveFast(move.From, move.To, undoInfo.captured, undoInfo.moved, undoInfo.oldRights);
+                    board.UnmakeMoveFast(move.From, move.To, undoInfo.captured, undoInfo.moved, undoInfo.oldRights, undoInfo.oldEP);
 
                     maxEval = Math.Max(maxEval, eval);
                     alpha = Math.Max(alpha, eval);
@@ -80,7 +76,7 @@ namespace StampedeChess.Core
 
                     int eval = Minimax(board, depth - 1, alpha, beta, true);
 
-                    board.UnmakeMoveFast(move.From, move.To, undoInfo.captured, undoInfo.moved, undoInfo.oldRights);
+                    board.UnmakeMoveFast(move.From, move.To, undoInfo.captured, undoInfo.moved, undoInfo.oldRights, undoInfo.oldEP);
 
                     minEval = Math.Min(minEval, eval);
                     beta = Math.Min(beta, eval);

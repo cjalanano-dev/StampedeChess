@@ -177,14 +177,19 @@ namespace StampedeChess.Core
 
         private static bool IsEdge(int square, int offset)
         {
+            // if moving right (1) or diagonal right (-7, 9), block if on H-file
             if (offset == 1 || offset == -7 || offset == 9)
                 if (square % 8 == 7) return true;
 
+            // if moving left (-1) or diagonal left (7, -9), block if on A-file
             if (offset == -1 || offset == 7 || offset == -9)
                 if (square % 8 == 0) return true;
 
-            if (offset > 0 && square >= 56) return true;
-            if (offset < 0 && square <= 7) return true;
+            // only block upward moves (8, 7, 9) if on Rank 8
+            if (square >= 56 && (offset == 8 || offset == 9 || offset == 7)) return true;
+
+            // only block downward moves (-8, -7, -9) if on Rank 1
+            if (square <= 7 && (offset == -8 || offset == -9 || offset == -7)) return true;
 
             return false;
         }
