@@ -9,106 +9,128 @@ namespace StampedeChess.Core
         public static ulong GetPseudoLegalMoves(int square, int pieceType, Board board)
         {
             ulong moves = 0;
-            // Ensure Board.cs has GetWhitePieces(), GetBlackPieces(), GetAllPieces() as public methods
             ulong ownPieces = board.IsWhiteToMove ? board.GetWhitePieces() : board.GetBlackPieces();
             ulong allPieces = board.GetAllPieces();
             ulong enemyPieces = board.IsWhiteToMove ? board.GetBlackPieces() : board.GetWhitePieces();
 
-            // 1. Knights (Jumpers)
-            // Note: Assuming Piece class exists. If not, replace with: if (pieceType == 1 || pieceType == 7)
+            // knights
             if (pieceType == Piece.WhiteKnight || pieceType == Piece.BlackKnight)
             {
                 moves = MoveTables.KnightAttacks[square];
-                moves &= ~ownPieces; // Can't land on own pieces
+                moves &= ~ownPieces;
             }
-            // 2. Kings (One step)
+            // kings (including castling)
             else if (pieceType == Piece.WhiteKing || pieceType == Piece.BlackKing)
             {
                 moves = MoveTables.KingAttacks[square];
                 moves &= ~ownPieces;
+
+                // castling logic
+                // verify: 1. right exists 2. path empty 3. squares safe (cannot move through check)
+                if (board.IsWhiteToMove)
+                {
+                    // white king side (e1 -> g1)
+                    // check mask 1 (WK), square e1(4), empty f1(5) g1(6)
+                    if ((board.CastlingRights & 1) != 0 && square == 4)
+                    {
+                        if ((allPieces & ((1UL << 5) | (1UL << 6))) == 0)
+                        {
+                            // safety check: e1, f1, g1 must not be attacked
+                            if (!board.IsSquareAttacked(4, false) && !board.IsSquareAttacked(5, false))
+                                moves |= (1UL << 6);
+                        }
+                    }
+                    // white queen side (e1 -> c1)
+                    if ((board.CastlingRights & 2) != 0 && square == 4)
+                    {
+                        if ((allPieces & ((1UL << 3) | (1UL << 2) | (1UL << 1))) == 0)
+                        {
+                            if (!board.IsSquareAttacked(4, false) && !board.IsSquareAttacked(3, false))
+                                moves |= (1UL << 2);
+                        }
+                    }
+                }
+                else
+                {
+                    // black king side (e8 -> g8)
+                    if ((board.CastlingRights & 4) != 0 && square == 60)
+                    {
+                        if ((allPieces & ((1UL << 61) | (1UL << 62))) == 0)
+                        {
+                            if (!board.IsSquareAttacked(60, true) && !board.IsSquareAttacked(61, true))
+                                moves |= (1UL << 62);
+                        }
+                    }
+                    // black queen side (e8 -> c8)
+                    if ((board.CastlingRights & 8) != 0 && square == 60)
+                    {
+                        if ((allPieces & ((1UL << 59) | (1UL << 58) | (1UL << 57))) == 0)
+                        {
+                            if (!board.IsSquareAttacked(60, true) && !board.IsSquareAttacked(59, true))
+                                moves |= (1UL << 58);
+                        }
+                    }
+                }
             }
-            // 3. Sliding Pieces (Rooks, Bishops, Queens)
+            // sliding pieces
             else if (IsSlidingPiece(pieceType))
             {
                 moves = GenerateSlidingMoves(square, pieceType, board);
                 moves &= ~ownPieces;
             }
-            // 4. PAWNS (Complex Physics)
+            // pawns
             else
             {
-                if (board.IsWhiteToMove) // --- WHITE PAWNS ---
+                if (board.IsWhiteToMove)
                 {
-                    // A. Single Push (North +8)
+                    // single push
                     int up1 = square + 8;
-                    // Can only move forward if square is EMPTY
                     if (up1 < 64 && ((allPieces & (1UL << up1)) == 0))
                     {
                         moves |= (1UL << up1);
-
-                        // B. Double Push (North +16)
-                        // Only allowed if on Rank 2 (Index 8-15) AND path is clear
+                        // double push
                         if (square >= 8 && square <= 15)
                         {
                             int up2 = square + 16;
-                            if ((allPieces & (1UL << up2)) == 0)
-                            {
-                                moves |= (1UL << up2);
-                            }
+                            if ((allPieces & (1UL << up2)) == 0) moves |= (1UL << up2);
                         }
                     }
-
-                    // C. Captures (Diagonals +7 and +9)
-                    // Capture Left (NorthWest +7) - Not allowed from Column A
+                    // captures
                     if (square % 8 != 0)
                     {
                         int capLeft = square + 7;
-                        if ((enemyPieces & (1UL << capLeft)) != 0)
-                            moves |= (1UL << capLeft);
+                        if ((enemyPieces & (1UL << capLeft)) != 0) moves |= (1UL << capLeft);
                     }
-
-                    // Capture Right (NorthEast +9) - Not allowed from Column H
                     if (square % 8 != 7)
                     {
                         int capRight = square + 9;
-                        if ((enemyPieces & (1UL << capRight)) != 0)
-                            moves |= (1UL << capRight);
+                        if ((enemyPieces & (1UL << capRight)) != 0) moves |= (1UL << capRight);
                     }
                 }
-                else // --- BLACK PAWNS ---
+                else
                 {
-                    // A. Single Push (South -8)
+                    // single push
                     int down1 = square - 8;
                     if (down1 >= 0 && ((allPieces & (1UL << down1)) == 0))
                     {
                         moves |= (1UL << down1);
-
-                        // B. Double Push (South -16)
-                        // Only allowed if on Rank 7 (Index 48-55)
+                        // double push
                         if (square >= 48 && square <= 55)
                         {
                             int down2 = square - 16;
-                            if ((allPieces & (1UL << down2)) == 0)
-                            {
-                                moves |= (1UL << down2);
-                            }
+                            if ((allPieces & (1UL << down2)) == 0) moves |= (1UL << down2);
                         }
                     }
-
-                    // C. Captures (Diagonals -7 and -9)
-                    // Capture Right (SouthEast -7) - Not allowed from Column H
+                    // captures
                     if (square % 8 != 7)
                     {
                         int capRight = square - 7;
-                        if ((enemyPieces & (1UL << capRight)) != 0)
-                            moves |= (1UL << capRight);
+                        if ((enemyPieces & (1UL << capRight)) != 0) moves |= (1UL << capRight);
                     }
-
-                    // Capture Left (SouthWest -9) - Not allowed from Column A
                     if (square % 8 != 0)
                     {
                         int capLeft = square - 9;
-                        if ((enemyPieces & (1UL << capLeft)) != 0)
-                            moves |= (1UL << capLeft);
+                        if ((enemyPieces & (1UL << capLeft)) != 0) moves |= (1UL << capLeft);
                     }
                 }
             }
@@ -136,11 +158,7 @@ namespace StampedeChess.Core
                 {
                     if (IsEdge(current, offset)) break;
                     current += offset;
-
-                    // Add square
                     attacks |= (1UL << current);
-
-                    // If we hit ANY piece (friend or foe), we stop sliding
                     if (((1UL << current) & allPieces) != 0) break;
                 }
             }
@@ -159,14 +177,19 @@ namespace StampedeChess.Core
 
         private static bool IsEdge(int square, int offset)
         {
+            // if moving right (1) or diagonal right (-7, 9), block if on H-file
             if (offset == 1 || offset == -7 || offset == 9)
-                if (square % 8 == 7) return true; // H-file boundary
+                if (square % 8 == 7) return true;
 
+            // if moving left (-1) or diagonal left (7, -9), block if on A-file
             if (offset == -1 || offset == 7 || offset == -9)
-                if (square % 8 == 0) return true; // A-file boundary
+                if (square % 8 == 0) return true;
 
-            if (offset > 0 && square >= 56) return true;
-            if (offset < 0 && square <= 7) return true;
+            // only block upward moves (8, 7, 9) if on Rank 8
+            if (square >= 56 && (offset == 8 || offset == 9 || offset == 7)) return true;
+
+            // only block downward moves (-8, -7, -9) if on Rank 1
+            if (square <= 7 && (offset == -8 || offset == -9 || offset == -7)) return true;
 
             return false;
         }

@@ -3,6 +3,7 @@ using Spectre.Console.Rendering;
 using StampedeChess.Core;
 using System;
 using System.Collections.Generic;
+using System.Text;
 
 namespace StampedeChess.UI
 {
@@ -107,8 +108,35 @@ namespace StampedeChess.UI
             string barContent = sb.ToString().TrimEnd('\n');
 
             return new Panel(new Markup(barContent))
-                .Border(BoxBorder.None) // invisible border so it looks like a floating strip
+                .Border(BoxBorder.None) 
                 .Padding(0, 0);
+        }
+
+        public static Panel GetMoveHistoryPanel(Board board)
+        {
+            var sb = new StringBuilder();
+            var history = board.MoveHistory;    
+
+            for (int i = 0; i < history.Count; i += 2)
+            {
+                int moveNumber = (i / 2) + 1;
+                string whiteMove = history[i];
+                string blackMove = (i + 1 < history.Count) ? history[i + 1] : "";
+
+                sb.Append($"[grey]{moveNumber}.[/] [green]{whiteMove}[/] ");
+
+                if (!string.IsNullOrEmpty(blackMove))
+                {
+                    sb.Append($"[orange1]{blackMove}[/] ");
+                }
+
+                if (moveNumber % 2 == 0) sb.Append("\n");
+            }
+
+            return new Panel(new Markup(sb.ToString()))
+                .Header("Match History (PGN)")
+                .Border(BoxBorder.Rounded)
+                .Expand();
         }
     }
 }
