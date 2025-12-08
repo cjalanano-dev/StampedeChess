@@ -254,22 +254,44 @@ namespace StampedeChess.Core
             if (square == 63) CastlingRights &= ~4;
         }
 
-        public List<(int From, int To)> GetAllLegalMoves()
+        public List<(int From, int To)> GetAllLegalMoves(bool capturesOnly = false)
         {
             var moves = new List<(int, int)>();
             bool isWhite = IsWhiteToMove;
+
             for (int i = 0; i < 64; i++)
             {
                 int piece = GetPieceAtSquare(i);
+                // this checks if there is a piece and if it belongs to the current player
                 if (piece != -1 && (piece <= 5) == isWhite)
                 {
                     ulong legalBitmask = MoveGenerator.GetPseudoLegalMoves(i, piece, this);
-                    for (int target = 0; target < 64; target++)
+
+                    // a while loop to get all set bits from the bitmask.
+                    // bitmasks are the way to represent multiple possible moves efficiently. faster than lists.
+                    while (legalBitmask != 0)
                     {
-                        if ((legalBitmask & (1UL << target)) != 0)
+                        // we get the index of the least significant set bit (LSB)
+                        int target = TrailingZeroCount(legalBitmask);
+
+                        bool addMove = true;
+
+                        if (capturesOnly)
+                        {
+                            int targetPiece = GetPieceAtSquare(target);
+                            bool isEP = (target == EnPassantTarget) && (piece == 0 || piece == 6);
+
+                            // if not a direct capture AND not en passant then we skip it
+                            if (targetPiece == -1 && !isEP) addMove = false;
+                        }
+
+                        if (addMove)
                         {
                             if (IsMoveSafe(i, target)) moves.Add((i, target));
                         }
+
+                        // clears the LSB so we can process the next one in the next iteration
+                        legalBitmask &= ~(1UL << target);
                     }
                 }
             }

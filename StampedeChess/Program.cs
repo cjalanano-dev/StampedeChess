@@ -53,6 +53,7 @@ namespace StampedeChess
                 AnsiConsole.Clear();
                 var logo = new Text(titleArt, new Style(Color.Cyan1)).Centered();
                 var splashText = new Text(currentSplash, new Style(Color.Yellow, decoration: Decoration.Bold)).Centered();
+                AnsiConsole.Write(new Text("\n\n\n"));
                 AnsiConsole.Write(logo);
                 AnsiConsole.Write(splashText);
                 AnsiConsole.Write(new Text("\n\n"));
