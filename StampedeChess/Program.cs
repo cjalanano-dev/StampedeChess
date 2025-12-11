@@ -52,10 +52,10 @@ namespace StampedeChess
                 AnsiConsole.Clear();
                 var logo = new Text(titleArt, new Style(Color.Cyan1)).Centered();
                 var splashText = new Text(currentSplash, new Style(Color.Yellow, decoration: Decoration.Bold)).Centered();
-                AnsiConsole.Write(new Text("\n\n"));
+                AnsiConsole.Write(new Text("\n\n\n\n"));
                 AnsiConsole.Write(logo);
                 AnsiConsole.Write(splashText);
-                AnsiConsole.Write(new Text("\n\n"));
+                AnsiConsole.Write(new Text("\n\n\n\n"));
 
                 var menuGrid = new Grid().Centered();
                 menuGrid.AddColumn();
@@ -87,7 +87,7 @@ namespace StampedeChess
         static void RunGame()
         {
             // fake booting sequence
-            AnsiConsole.Status().Start("Booting Kernel...", ctx => { Thread.Sleep(500); });
+            AnsiConsole.Status().Start("Booting Engine...", ctx => { Thread.Sleep(500); });
 
             Board board = new Board();
             const string StartFEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
