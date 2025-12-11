@@ -87,7 +87,7 @@ namespace StampedeChess
         static void RunGame()
         {
             // fake booting sequence
-            AnsiConsole.Status().Start("Booting Engine...", ctx => { Thread.Sleep(500); });
+            AnsiConsole.Status().Start("Booting Kernel...", ctx => { Thread.Sleep(500); });
 
             Board board = new Board();
             const string StartFEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
@@ -212,9 +212,20 @@ namespace StampedeChess
         {
             string title = isPlayerWin ? "VICTORY" : "DEFEAT";
             var titleColor = isPlayerWin ? Color.Gold1 : Color.Red;
-            string subText = isPlayerWin
-                ? "[bold gold1]CHECKMATE! YOU WON![/]"
-                : "[bold red]CHECKMATE! ENGINE WINS![/]";
+
+            string subText;
+            if (result.ToLower().Contains("resign"))
+            {
+                subText = isPlayerWin
+                    ? "[bold gold1]OPPONENT RESIGNED[/]"
+                    : "[bold red]YOU RESIGNED[/]";
+            }
+            else
+            {
+                subText = isPlayerWin
+                    ? "[bold gold1]CHECKMATE! YOU WON![/]"
+                    : "[bold red]CHECKMATE! ENGINE WINS![/]";
+            }
 
             // results layout
             var layout = new Layout("GameOver")
@@ -231,7 +242,7 @@ namespace StampedeChess
             // final board state
             var visualBoard = Renderer.GetVisualBoard(board);
             var boardPanel = new Panel(Align.Center(visualBoard, VerticalAlignment.Middle))
-                .Header("Final Position", Justify.Center)
+                .Header("Final Position", Justify.Left)
                 .Border(BoxBorder.Heavy)
                 .Expand();
 
@@ -263,7 +274,8 @@ namespace StampedeChess
             Console.ReadKey(true);
         }
 
-        // this is a placeholder for future options menu for settings
+
+        // placeholder for future options menu
         //static void RunOptions()
         //{
         //    Console.Clear();

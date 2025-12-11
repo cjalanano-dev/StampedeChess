@@ -8,18 +8,19 @@ namespace StampedeChess.Core
 {
     internal class Zobrist
     {
-        // Zorbist hashing implementation would go here
+        // zobrist hashing stuff to identify board positions quickly
 
-        // [12 pieces][64 squares]
+        // [12 pieces][64 squares] lookup table
         public static readonly ulong[,] Pieces = new ulong[12, 64];
         public static readonly ulong[] CastlingRights = new ulong[16];
-        public static readonly ulong[] EnPassantFile = new ulong[9]; // 0-7 files, 8 = none
+        public static readonly ulong[] EnPassantFile = new ulong[9]; // 0-7 files, 8 means no en passant available
         public static ulong SideToMove;
 
-        // Initialize with random numbers
+        // fill the tables with random numbers on startup
         static Zobrist()
         {
-            // Use a fixed seed so the "random" numbers are the same every time we run the app
+            // use a fixed seed so the hashes are consistent across runs.
+            // otherwise, loading a save or debugging would be a nightmare.
             Random rng = new Random(123456);
 
             for (int p = 0; p < 12; p++)
@@ -43,4 +44,3 @@ namespace StampedeChess.Core
         }
     }
 }
-
