@@ -64,6 +64,8 @@
     <Compile Include="Core\MoveGenerator.cs" />
     <Compile Include="Core\MoveTables.cs" />
     <Compile Include="Core\Piece.cs" />
+    <Compile Include="Core\TranspositionTable.cs" />
+    <Compile Include="Core\Zobrist.cs" />
     <Compile Include="Program.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
     <Compile Include="UI\LayoutManager.cs" />

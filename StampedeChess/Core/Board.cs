@@ -1,6 +1,6 @@
 ﻿using System;
-using System.Text;
 using System.Collections.Generic;
+using System.Text;
 
 namespace StampedeChess.Core
 {
@@ -10,7 +10,25 @@ namespace StampedeChess.Core
         public bool IsWhiteToMove { get; set; }
         public int CastlingRights { get; set; }
         public int EnPassantTarget { get; set; }
+        public ulong CurrentHash { get; set; }
+        // keep track of moves so we don't get confused about the opening
         public readonly List<string> MoveHistory = new List<string>();
+
+        // masks to help us check pawn structures
+        private static readonly ulong[] FileMasks = new ulong[8];
+        private static readonly ulong[] RankMasks = new ulong[8];
+        private static readonly ulong[] IsolatedMasks = new ulong[8];
+        private static readonly ulong[,] PassedPawnMasks = new ulong[2, 64]; // [color, square]
+
+        // --- bonus tables ---
+        // reward pawns that are running down the board
+        private static readonly int[] PassedPawnBonus = { 0, 5, 10, 20, 35, 60, 100, 0 };
+        private const int BishopPairBonus = 40;
+        private const int TempoBonus = 10;
+
+        // king safety settings
+        private const int PawnShieldBonus = 25; // bonus for having a pawn shield
+        private const int OpenFilePenalty = -30; // scary to have no shield
 
         public Board()
         {
@@ -18,200 +36,288 @@ namespace StampedeChess.Core
             CastlingRights = 15;
             EnPassantTarget = -1;
             MoveTables.Init();
+            InitMasks();
         }
+
+        private void InitMasks()
+        {
+            for (int f = 0; f < 8; f++) FileMasks[f] = 0x0101010101010101UL << f;
+            for (int r = 0; r < 8; r++) RankMasks[r] = 0xFFUL << (r * 8);
+
+            for (int f = 0; f < 8; f++)
+            {
+                if (f > 0) IsolatedMasks[f] |= FileMasks[f - 1];
+                if (f < 7) IsolatedMasks[f] |= FileMasks[f + 1];
+            }
+
+            // pre-calculate masks for checking passed pawns
+            for (int i = 0; i < 64; i++)
+            {
+                int rank = i / 8;
+                int file = i % 8;
+
+                // white passed pawn: check ahead
+                ulong forwardMaskW = 0;
+                for (int r = rank + 1; r < 8; r++)
+                {
+                    forwardMaskW |= (1UL << (r * 8 + file));
+                    if (file > 0) forwardMaskW |= (1UL << (r * 8 + (file - 1)));
+                    if (file < 7) forwardMaskW |= (1UL << (r * 8 + (file + 1)));
+                }
+                PassedPawnMasks[0, i] = forwardMaskW;
+
+                // black passed pawn: check behind (visually ahead for black)
+                ulong forwardMaskB = 0;
+                for (int r = rank - 1; r >= 0; r--)
+                {
+                    forwardMaskB |= (1UL << (r * 8 + file));
+                    if (file > 0) forwardMaskB |= (1UL << (r * 8 + (file - 1)));
+                    if (file < 7) forwardMaskB |= (1UL << (r * 8 + (file + 1)));
+                }
+                PassedPawnMasks[1, i] = forwardMaskB;
+            }
+        }
+
+        // --- evaluation tables ---
+        // tons of magic numbers here to tell pieces where they like to be
+        private static readonly int[] MgPawnTable = { 0, 0, 0, 0, 0, 0, 0, 0, 50, 50, 50, 50, 50, 50, 50, 50, 10, 10, 20, 30, 30, 20, 10, 10, 5, 5, 10, 25, 25, 10, 5, 5, 0, 0, 0, 20, 20, 0, 0, 0, 5, -5, -10, 0, 0, -10, -5, 5, 5, 10, 10, -20, -20, 10, 10, 5, 0, 0, 0, 0, 0, 0, 0, 0 };
+        private static readonly int[] EgPawnTable = { 0, 0, 0, 0, 0, 0, 0, 0, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 30, 30, 20, 20, 20, 30, 30, 30, 40, 40, 30, 30, 30, 40, 40, 40, 50, 50, 40, 40, 40, 50, 50, 50, 60, 60, 50, 50, 50, 60, 60, 60, 70, 70, 60, 60, 60, 0, 0, 0, 0, 0, 0, 0, 0 };
+        private static readonly int[] MgKnightTable = { -50, -40, -30, -30, -30, -30, -40, -50, -40, -20, 0, 0, 0, 0, -20, -40, -30, 0, 10, 15, 15, 10, 0, -30, -30, 5, 15, 20, 20, 15, 5, -30, -30, 0, 15, 20, 20, 15, 0, -30, -30, 5, 10, 15, 15, 10, 5, -30, -40, -20, 0, 5, 5, 0, -20, -40, -50, -40, -30, -30, -30, -30, -40, -50 };
+        private static readonly int[] EgKnightTable = MgKnightTable;
+        private static readonly int[] MgBishopTable = { -20, -10, -10, -10, -10, -10, -10, -20, -10, 0, 0, 0, 0, 0, 0, -10, -10, 0, 5, 10, 10, 5, 0, -10, -10, 5, 5, 10, 10, 5, 5, -10, -10, 0, 10, 10, 10, 10, 0, -10, -10, 10, 10, 10, 10, 10, 10, -10, -10, 5, 0, 0, 0, 0, 5, -10, -20, -10, -10, -10, -10, -10, -10, -20 };
+        private static readonly int[] EgBishopTable = MgBishopTable;
+        private static readonly int[] MgRookTable = { 0, 0, 0, 0, 0, 0, 0, 0, 5, 10, 10, 10, 10, 10, 10, 5, -5, 0, 0, 0, 0, 0, 0, -5, -5, 0, 0, 0, 0, 0, 0, -5, -5, 0, 0, 0, 0, 0, 0, -5, -5, 0, 0, 0, 0, 0, 0, -5, 5, 10, 10, 10, 10, 10, 10, 5, 0, 0, 0, 5, 5, 0, 0, 0 };
+        private static readonly int[] EgRookTable = MgRookTable;
+        private static readonly int[] MgQueenTable = { -20, -10, -10, -5, -5, -10, -10, -20, -10, 0, 0, 0, 0, 0, 0, -10, -10, 0, 5, 5, 5, 5, 0, -10, -5, 0, 5, 5, 5, 5, 0, -5, 0, 0, 5, 5, 5, 5, 0, -5, -10, 5, 5, 5, 5, 5, 0, -10, -10, 0, 5, 0, 0, 0, 0, -10, -20, -10, -10, -5, -5, -10, -10, -20 };
+        private static readonly int[] EgQueenTable = MgQueenTable;
+        private static readonly int[] MgKingTable = { -30, -40, -40, -50, -50, -40, -40, -30, -30, -40, -40, -50, -50, -40, -40, -30, -30, -40, -40, -50, -50, -40, -40, -30, -30, -40, -40, -50, -50, -40, -40, -30, -20, -30, -30, -40, -40, -30, -30, -20, -10, -20, -20, -20, -20, -20, -20, -10, 20, 20, 0, 0, 0, 0, 20, 20, 20, 30, 10, 0, 0, 10, 30, 20 };
+        private static readonly int[] EgKingTable = { -50, -40, -30, -20, -20, -30, -40, -50, -30, -20, -10, 0, 0, -10, -20, -30, -30, -10, 20, 30, 30, 20, -10, -30, -30, -10, 30, 40, 40, 30, -10, -30, -30, -10, 30, 40, 40, 30, -10, -30, -30, -10, 20, 30, 30, 20, -10, -30, -30, -30, 0, 0, 0, 0, -30, -30, -50, -30, -30, -30, -30, -30, -30, -50 };
 
         public float Evaluate()
         {
-            float score = 0;
+            int mgScore = 0;
+            int egScore = 0;
+            int gamePhase = 0;
+
+            ulong whitePawns = Bitboards[0];
+            ulong blackPawns = Bitboards[6];
+
+            // count bishops for the pair bonus
+            int whiteBishops = 0;
+            int blackBishops = 0;
+
             for (int i = 0; i < 12; i++)
             {
                 ulong bitboard = Bitboards[i];
+                if (i == 2) whiteBishops = CountBits(bitboard);
+                if (i == 8) blackBishops = CountBits(bitboard);
+
                 while (bitboard != 0)
                 {
                     int square = TrailingZeroCount(bitboard);
+                    bool isWhite = i <= 5;
+                    int pieceType = i > 5 ? i - 6 : i;
 
-                    float material = 0.0f;
-                    switch (i)
+                    int mgMat = 0, egMat = 0;
+                    int phaseVal = 0;
+
+                    // 1. material weights
+                    switch (pieceType)
                     {
-                        case 0:
-                        case 6:
-                            material = 1.0f;   // pawn
-                            break;
-                        case 1:
-                        case 7:
-                            material = 3.0f;   // knight
-                            break;
-                        case 2:
-                        case 8:
-                            material = 3.1f;   // bishop
-                            break;
-                        case 3:
-                        case 9:
-                            material = 5.0f;   // rook
-                            break;
-                        case 4:
-                        case 10:
-                            material = 9.0f;   // queen
-                            break;
-                        default:
-                            material = 200.0f; // king
-                            break;
+                        case 0: mgMat = 100; egMat = 100; phaseVal = 0; break;
+                        case 1: mgMat = 320; egMat = 280; phaseVal = 1; break;
+                        case 2: mgMat = 330; egMat = 300; phaseVal = 1; break;
+                        case 3: mgMat = 500; egMat = 550; phaseVal = 2; break;
+                        case 4: mgMat = 900; egMat = 950; phaseVal = 4; break;
                     }
 
-                    float position = 0.0f;
-
-                    // determine piece type (0-5) regardless of color
-                    int pieceType = i > 5 ? i - 6 : i;
-                    bool isWhite = i <= 5;
-
-                    // if black, we must flip the square vertically (mirror the board)
-                    // square ^ 56 flips rank 1 to 8, 2 to 7, etc.
+                    // 2. piece-square tables lookup
                     int tableIndex = isWhite ? square : (square ^ 56);
+                    int mgPos = 0, egPos = 0;
+                    int[] mgTable = null, egTable = null;
 
                     switch (pieceType)
                     {
-                        case 0: position = PawnTable[tableIndex]; break;
-                        case 1: position = KnightTable[tableIndex]; break;
-                        case 2: position = BishopTable[tableIndex]; break;
-                        case 3: position = RookTable[tableIndex]; break;
-                        case 4: position = QueenTable[tableIndex]; break;
-                        case 5: position = KingTable[tableIndex]; break;
+                        case 0: mgTable = MgPawnTable; egTable = EgPawnTable; break;
+                        case 1: mgTable = MgKnightTable; egTable = EgKnightTable; break;
+                        case 2: mgTable = MgBishopTable; egTable = EgBishopTable; break;
+                        case 3: mgTable = MgRookTable; egTable = EgRookTable; break;
+                        case 4: mgTable = MgQueenTable; egTable = EgQueenTable; break;
+                        case 5: mgTable = MgKingTable; egTable = EgKingTable; break;
+                    }
+                    if (mgTable != null) { mgPos = mgTable[tableIndex]; egPos = egTable[tableIndex]; }
+
+                    // 3. positional bonuses
+                    int posBonus = 0;
+
+                    // mobility calculation (skipping pawns/kings to save cpu)
+                    if (pieceType != 0 && pieceType != 5)
+                    {
+                        ulong moves = MoveGenerator.GetPseudoLegalMoves(square, i, this);
+                        int moveCount = CountBits(moves);
+                        if (pieceType == 1) posBonus += moveCount * 3;
+                        if (pieceType == 2) posBonus += moveCount * 3;
+                        if (pieceType == 3) posBonus += moveCount * 2;
+                        if (pieceType == 4) posBonus += moveCount * 1;
                     }
 
-                    // combine
-                    if (isWhite) score += (material + position);
-                    else score -= (material + position);
+                    // pawn structure logic
+                    if (pieceType == 0)
+                    {
+                        int file = square % 8;
+                        int rank = square / 8;
+                        int relativeRank = isWhite ? rank : 7 - rank;
 
+                        ulong myPawns = isWhite ? whitePawns : blackPawns;
+                        ulong enemyPawns = isWhite ? blackPawns : whitePawns;
+
+                        // penalty for doubled pawns
+                        if (CountBits(myPawns & FileMasks[file]) > 1) posBonus -= 20;
+
+                        // penalty for isolated pawns
+                        if ((myPawns & IsolatedMasks[file]) == 0) posBonus -= 20;
+
+                        // huge bonus for passed pawns
+                        ulong passedMask = PassedPawnMasks[isWhite ? 0 : 1, square];
+                        if ((passedMask & enemyPawns) == 0)
+                        {
+                            posBonus += PassedPawnBonus[relativeRank];
+                        }
+                    }
+
+                    // king safety (pawn shield)
+                    if (pieceType == 5)
+                    {
+                        // check pawns in front of king
+                        int file = square % 8;
+                        int rank = square / 8;
+
+                        // only care in middlegame (when phase is low)
+                        ulong myPawns = isWhite ? whitePawns : blackPawns;
+
+                        // simplified shield: check immediate 3 squares in front
+                        int shieldCount = 0;
+                        int forward = isWhite ? 8 : -8;
+
+                        // check front-left, front, front-right
+                        if (file > 0) { if ((myPawns & (1UL << (square + forward - 1))) != 0) shieldCount++; }
+                        if ((myPawns & (1UL << (square + forward))) != 0) shieldCount++;
+                        if (file < 7) { if ((myPawns & (1UL << (square + forward + 1))) != 0) shieldCount++; }
+
+                        // bonus for shield, penalty for open king
+                        if (shieldCount > 0) mgPos += (shieldCount * PawnShieldBonus);
+                        else mgPos += OpenFilePenalty;
+                    }
+
+                    int totalMg = mgMat + mgPos + posBonus;
+                    int totalEg = egMat + egPos + posBonus;
+
+                    if (isWhite) { mgScore += totalMg; egScore += totalEg; }
+                    else { mgScore -= totalMg; egScore -= totalEg; }
+
+                    gamePhase += phaseVal;
                     bitboard &= (bitboard - 1);
                 }
             }
-            return score;
+
+            // bishop pair bonus
+            if (whiteBishops >= 2) { mgScore += BishopPairBonus; egScore += BishopPairBonus; }
+            if (blackBishops >= 2) { mgScore -= BishopPairBonus; egScore -= BishopPairBonus; }
+
+            // tempo bonus (it's good to be on move)
+            if (IsWhiteToMove) { mgScore += TempoBonus; egScore += TempoBonus; }
+            else { mgScore -= TempoBonus; egScore -= TempoBonus; }
+
+            // taper score between midgame and endgame
+            if (gamePhase > 24) gamePhase = 24;
+            int taperedScore = ((mgScore * gamePhase) + (egScore * (24 - gamePhase))) / 24;
+
+            return taperedScore / 100.0f;
         }
 
-        // piece-square tables
-        // defines where pieces like to be. values are added to the material score.
-        // defined from white's perspective (bottom to top).
+        private int CountBits(ulong value)
+        {
+            int count = 0;
+            while (value != 0) { count++; value &= (value - 1); }
+            return count;
+        }
 
-        private static readonly float[] PawnTable = {
-             0.0f,  0.0f,  0.0f,  0.0f,  0.0f,  0.0f,  0.0f,  0.0f, // rank 1 (illegal)
-             0.5f,  0.5f,  0.5f,  0.5f,  0.5f,  0.5f,  0.5f,  0.5f, // rank 2 (start)
-             0.1f,  0.1f,  0.2f,  0.3f,  0.3f,  0.2f,  0.1f,  0.1f, // rank 3
-             0.0f,  0.0f,  0.0f,  0.2f,  0.2f,  0.0f,  0.0f,  0.0f, // rank 4
-             0.0f,  0.0f,  0.0f,  0.3f,  0.3f,  0.0f,  0.0f,  0.0f, // rank 5
-             0.5f,  0.5f,  0.5f,  0.6f,  0.6f,  0.5f,  0.5f,  0.5f, // rank 6
-             0.8f,  0.8f,  0.8f,  0.8f,  0.8f,  0.8f,  0.8f,  0.8f, // rank 7 (promotion imminent)
-             0.0f,  0.0f,  0.0f,  0.0f,  0.0f,  0.0f,  0.0f,  0.0f  // rank 8 (promotion)
-        };
+        private int TrailingZeroCount(ulong value)
+        {
+            if (value == 0) return 64;
+            int count = 0;
+            while ((value & 1) == 0) { value >>= 1; count++; }
+            return count;
+        }
 
-        private static readonly float[] KnightTable = {
-            -0.5f, -0.4f, -0.3f, -0.3f, -0.3f, -0.3f, -0.4f, -0.5f, // rank 1 (back rank bad)
-            -0.4f, -0.2f,  0.0f,  0.0f,  0.0f,  0.0f, -0.2f, -0.4f,
-            -0.3f,  0.0f,  0.1f,  0.2f,  0.2f,  0.1f,  0.0f, -0.3f,
-            -0.3f,  0.0f,  0.2f,  0.2f,  0.2f,  0.2f,  0.0f, -0.3f, // center good
-            -0.3f,  0.0f,  0.2f,  0.2f,  0.2f,  0.2f,  0.0f, -0.3f,
-            -0.3f,  0.0f,  0.1f,  0.2f,  0.2f,  0.1f,  0.0f, -0.3f,
-            -0.4f, -0.2f,  0.0f,  0.0f,  0.0f,  0.0f, -0.2f, -0.4f,
-            -0.5f, -0.4f, -0.3f, -0.3f, -0.3f, -0.3f, -0.4f, -0.5f  // corners bad
-        };
-
-        private static readonly float[] BishopTable = {
-            -0.2f, -0.1f, -0.1f, -0.1f, -0.1f, -0.1f, -0.1f, -0.2f,
-            -0.1f,  0.0f,  0.0f,  0.0f,  0.0f,  0.0f,  0.0f, -0.1f,
-            -0.1f,  0.0f,  0.1f,  0.1f,  0.1f,  0.1f,  0.0f, -0.1f,
-            -0.1f,  0.1f,  0.1f,  0.1f,  0.1f,  0.1f,  0.1f, -0.1f, // long diagonals good
-            -0.1f,  0.0f,  0.1f,  0.1f,  0.1f,  0.1f,  0.0f, -0.1f,
-            -0.1f,  0.1f,  0.1f,  0.1f,  0.1f,  0.1f,  0.1f, -0.1f,
-            -0.1f,  0.0f,  0.0f,  0.0f,  0.0f,  0.0f,  0.0f, -0.1f,
-            -0.2f, -0.1f, -0.1f, -0.1f, -0.1f, -0.1f, -0.1f, -0.2f
-        };
-
-        private static readonly float[] RookTable = {
-             0.0f,  0.0f,  0.0f,  0.0f,  0.0f,  0.0f,  0.0f,  0.0f,
-             0.1f,  0.2f,  0.2f,  0.2f,  0.2f,  0.2f,  0.2f,  0.1f,
-            -0.1f,  0.0f,  0.0f,  0.0f,  0.0f,  0.0f,  0.0f, -0.1f,
-            -0.1f,  0.0f,  0.0f,  0.0f,  0.0f,  0.0f,  0.0f, -0.1f,
-            -0.1f,  0.0f,  0.0f,  0.0f,  0.0f,  0.0f,  0.0f, -0.1f,
-            -0.1f,  0.0f,  0.0f,  0.0f,  0.0f,  0.0f,  0.0f, -0.1f,
-             0.1f,  0.1f,  0.1f,  0.1f,  0.1f,  0.1f,  0.1f,  0.1f, // 7th rank nice
-             0.0f,  0.0f,  0.0f,  0.0f,  0.0f,  0.0f,  0.0f,  0.0f
-        };
-
-        private static readonly float[] QueenTable = {
-            -0.2f, -0.1f, -0.1f, -0.1f, -0.1f, -0.1f, -0.1f, -0.2f,
-            -0.1f,  0.0f,  0.0f,  0.0f,  0.0f,  0.0f,  0.0f, -0.1f,
-            -0.1f,  0.0f,  0.1f,  0.1f,  0.1f,  0.1f,  0.0f, -0.1f,
-            -0.1f,  0.0f,  0.1f,  0.1f,  0.1f,  0.1f,  0.0f, -0.1f,
-             0.0f,  0.0f,  0.1f,  0.1f,  0.1f,  0.1f,  0.0f, -0.1f,
-            -0.1f,  0.1f,  0.1f,  0.1f,  0.1f,  0.1f,  0.1f, -0.1f,
-            -0.1f,  0.0f,  0.0f,  0.0f,  0.0f,  0.0f,  0.0f, -0.1f,
-            -0.2f, -0.1f, -0.1f, -0.1f, -0.1f, -0.1f, -0.1f, -0.2f
-        };
-
-        private static readonly float[] KingTable = {
-             0.2f,  0.3f,  0.1f,  0.0f,  0.0f,  0.1f,  0.3f,  0.2f, // back rank safety
-             0.2f,  0.2f,  0.0f,  0.0f,  0.0f,  0.0f,  0.2f,  0.2f,
-            -0.1f, -0.2f, -0.2f, -0.2f, -0.2f, -0.2f, -0.2f, -0.1f,
-            -0.2f, -0.3f, -0.3f, -0.4f, -0.4f, -0.3f, -0.3f, -0.2f, // center dangerous early
-            -0.3f, -0.4f, -0.4f, -0.5f, -0.5f, -0.4f, -0.4f, -0.3f,
-            -0.3f, -0.4f, -0.4f, -0.5f, -0.5f, -0.4f, -0.4f, -0.3f,
-            -0.3f, -0.4f, -0.4f, -0.5f, -0.5f, -0.4f, -0.4f, -0.3f,
-            -0.3f, -0.4f, -0.4f, -0.5f, -0.5f, -0.4f, -0.4f, -0.3f
-        };
-
-        public (int captured, int moved, int oldRights, int oldEP) MakeMoveFast(int from, int to)
+        public (int captured, int moved, int oldRights, int oldEP, ulong oldHash) MakeMoveFast(int from, int to)
         {
             int movingPiece = GetPieceAtSquare(from);
             int targetPiece = GetPieceAtSquare(to);
             int oldEP = EnPassantTarget;
             int oldRights = CastlingRights;
+            ulong oldHash = CurrentHash;
 
-            if (movingPiece == -1) return (-1, -1, oldRights, oldEP);
+            if (movingPiece == -1) return (-1, -1, oldRights, oldEP, oldHash);
 
-            // en passant
+            CurrentHash ^= Zobrist.Pieces[movingPiece, from];
+
+            if (targetPiece != -1)
+            {
+                CurrentHash ^= Zobrist.Pieces[targetPiece, to];
+                Bitboards[targetPiece] &= ~(1UL << to);
+                if (targetPiece == 3 || targetPiece == 9) UpdateCastlingRights(to);
+            }
+
             bool isEP = (to == EnPassantTarget) && (movingPiece == 0 || movingPiece == 6);
-
             if (isEP)
             {
                 int victimSquare = (movingPiece == 0) ? to - 8 : to + 8;
                 int victimPiece = (movingPiece == 0) ? 6 : 0;
                 Bitboards[victimPiece] &= ~(1UL << victimSquare);
+                CurrentHash ^= Zobrist.Pieces[victimPiece, victimSquare];
                 targetPiece = victimPiece;
-            }
-            else if (targetPiece != -1)
-            {
-                Bitboards[targetPiece] &= ~(1UL << to);
-                if (targetPiece == 3 || targetPiece == 9) UpdateCastlingRights(to);
             }
 
             Bitboards[movingPiece] &= ~(1UL << from);
             Bitboards[movingPiece] |= (1UL << to);
+            CurrentHash ^= Zobrist.Pieces[movingPiece, to];
 
-            // castling
             if (movingPiece == 5 && Math.Abs(to - from) == 2)
             {
-                if (to == 6) { Bitboards[3] &= ~(1UL << 7); Bitboards[3] |= (1UL << 5); }
-                else if (to == 2) { Bitboards[3] &= ~(1UL << 0); Bitboards[3] |= (1UL << 3); }
+                if (to == 6) { Bitboards[3] &= ~(1UL << 7); Bitboards[3] |= (1UL << 5); CurrentHash ^= Zobrist.Pieces[3, 7]; CurrentHash ^= Zobrist.Pieces[3, 5]; }
+                else if (to == 2) { Bitboards[3] &= ~(1UL << 0); Bitboards[3] |= (1UL << 3); CurrentHash ^= Zobrist.Pieces[3, 0]; CurrentHash ^= Zobrist.Pieces[3, 3]; }
             }
             else if (movingPiece == 11 && Math.Abs(to - from) == 2)
             {
-                if (to == 62) { Bitboards[9] &= ~(1UL << 63); Bitboards[9] |= (1UL << 61); }
-                else if (to == 58) { Bitboards[9] &= ~(1UL << 56); Bitboards[9] |= (1UL << 59); }
+                if (to == 62) { Bitboards[9] &= ~(1UL << 63); Bitboards[9] |= (1UL << 61); CurrentHash ^= Zobrist.Pieces[9, 63]; CurrentHash ^= Zobrist.Pieces[9, 61]; }
+                else if (to == 58) { Bitboards[9] &= ~(1UL << 56); Bitboards[9] |= (1UL << 59); CurrentHash ^= Zobrist.Pieces[9, 56]; CurrentHash ^= Zobrist.Pieces[9, 59]; }
             }
 
-            // update ep
+            CurrentHash ^= Zobrist.CastlingRights[oldRights];
+            UpdateCastlingRights(from);
+            CurrentHash ^= Zobrist.CastlingRights[CastlingRights];
+
+            int oldEpFile = (oldEP == -1) ? 8 : (oldEP % 8);
+            CurrentHash ^= Zobrist.EnPassantFile[oldEpFile];
+
             EnPassantTarget = -1;
             if ((movingPiece == 0 || movingPiece == 6) && Math.Abs(to - from) == 16)
                 EnPassantTarget = (from + to) / 2;
 
-            UpdateCastlingRights(from);
-            IsWhiteToMove = !IsWhiteToMove;
+            int newEpFile = (EnPassantTarget == -1) ? 8 : (EnPassantTarget % 8);
+            CurrentHash ^= Zobrist.EnPassantFile[newEpFile];
 
-            return (targetPiece, movingPiece, oldRights, oldEP);
+            IsWhiteToMove = !IsWhiteToMove;
+            CurrentHash ^= Zobrist.SideToMove;
+
+            return (targetPiece, movingPiece, oldRights, oldEP, oldHash);
         }
 
-        public void UnmakeMoveFast(int from, int to, int capturedPiece, int movingPiece, int oldRights, int oldEP)
+        public void UnmakeMoveFast(int from, int to, int capturedPiece, int movingPiece, int oldRights, int oldEP, ulong oldHash)
         {
             if (movingPiece == -1) return;
+            CurrentHash = oldHash;
             IsWhiteToMove = !IsWhiteToMove;
             CastlingRights = oldRights;
             EnPassantTarget = oldEP;
@@ -224,11 +330,9 @@ namespace StampedeChess.Core
                 bool wasEP = (to == oldEP) && (movingPiece == 0 || movingPiece == 6);
                 int captureSquare = to;
                 if (wasEP) captureSquare = (movingPiece == 0) ? to - 8 : to + 8;
-
                 Bitboards[capturedPiece] |= (1UL << captureSquare);
             }
 
-            // un-castle
             if (movingPiece == 5 && Math.Abs(to - from) == 2)
             {
                 if (to == 6) { Bitboards[3] &= ~(1UL << 5); Bitboards[3] |= (1UL << 7); }
@@ -258,39 +362,23 @@ namespace StampedeChess.Core
         {
             var moves = new List<(int, int)>();
             bool isWhite = IsWhiteToMove;
-
             for (int i = 0; i < 64; i++)
             {
                 int piece = GetPieceAtSquare(i);
-                // this checks if there is a piece and if it belongs to the current player
                 if (piece != -1 && (piece <= 5) == isWhite)
                 {
                     ulong legalBitmask = MoveGenerator.GetPseudoLegalMoves(i, piece, this);
-
-                    // a while loop to get all set bits from the bitmask.
-                    // bitmasks are the way to represent multiple possible moves efficiently. faster than lists.
                     while (legalBitmask != 0)
                     {
-                        // we get the index of the least significant set bit (LSB)
                         int target = TrailingZeroCount(legalBitmask);
-
                         bool addMove = true;
-
                         if (capturesOnly)
                         {
                             int targetPiece = GetPieceAtSquare(target);
                             bool isEP = (target == EnPassantTarget) && (piece == 0 || piece == 6);
-
-                            // if not a direct capture AND not en passant then we skip it
                             if (targetPiece == -1 && !isEP) addMove = false;
                         }
-
-                        if (addMove)
-                        {
-                            if (IsMoveSafe(i, target)) moves.Add((i, target));
-                        }
-
-                        // clears the LSB so we can process the next one in the next iteration
+                        if (addMove) { if (IsMoveSafe(i, target)) moves.Add((i, target)); }
                         legalBitmask &= ~(1UL << target);
                     }
                 }
@@ -307,15 +395,9 @@ namespace StampedeChess.Core
             newBoard.IsWhiteToMove = this.IsWhiteToMove;
             newBoard.CastlingRights = this.CastlingRights;
             newBoard.EnPassantTarget = this.EnPassantTarget;
+            newBoard.CurrentHash = this.CurrentHash;
+            newBoard.MoveHistory.AddRange(this.MoveHistory);
             return newBoard;
-        }
-
-        private int TrailingZeroCount(ulong value)
-        {
-            if (value == 0) return 64;
-            int count = 0;
-            while ((value & 1) == 0) { value >>= 1; count++; }
-            return count;
         }
 
         public string MakeMove(string moveString, out string errorMessage)
@@ -324,7 +406,6 @@ namespace StampedeChess.Core
             if (string.IsNullOrWhiteSpace(moveString)) { errorMessage = "Empty input."; return null; }
 
             string rawInput = moveString.Trim();
-
             string lowerInput = rawInput.ToLower().Replace("0", "o");
             if (lowerInput == "o-o") rawInput = IsWhiteToMove ? "e1g1" : "e8g8";
             else if (lowerInput == "o-o-o") rawInput = IsWhiteToMove ? "e1c1" : "e8c8";
@@ -334,10 +415,7 @@ namespace StampedeChess.Core
             string cleanMove = stringToParse.Replace("-", "").Replace("x", "").ToLower();
 
             string coordsOnly = "";
-            foreach (char c in cleanMove)
-            {
-                if ((c >= 'a' && c <= 'h') || (c >= '1' && c <= '8')) coordsOnly += c;
-            }
+            foreach (char c in cleanMove) { if ((c >= 'a' && c <= 'h') || (c >= '1' && c <= '8')) coordsOnly += c; }
 
             if (coordsOnly.Length != 4) { errorMessage = "Invalid Format."; return null; }
 
@@ -345,48 +423,24 @@ namespace StampedeChess.Core
             {
                 int fromIndex = StringToIndex(coordsOnly.Substring(0, 2));
                 int toIndex = StringToIndex(coordsOnly.Substring(2, 2));
-
                 int movingPieceType = GetPieceAtSquare(fromIndex);
                 if (movingPieceType == -1) { errorMessage = "No piece there."; return null; }
+                if ((movingPieceType <= 5) != IsWhiteToMove) { errorMessage = "Wrong turn."; return null; }
+
+                ulong legalMoves = MoveGenerator.GetPseudoLegalMoves(fromIndex, movingPieceType, this);
+                if ((legalMoves & (1UL << toIndex)) == 0) { errorMessage = "Illegal Move."; return null; }
+                if (!IsMoveSafe(fromIndex, toIndex)) { errorMessage = "Illegal Move: King in check."; return null; }
 
                 int targetPieceType = GetPieceAtSquare(toIndex);
                 bool isCapture = targetPieceType != -1;
-
-                if ((movingPieceType <= 5) != IsWhiteToMove) { errorMessage = "Wrong turn."; return null; }
-
                 bool isEP = (toIndex == EnPassantTarget) && (movingPieceType == 0 || movingPieceType == 6);
                 if (isEP) isCapture = true;
 
-                if (isCapture)
-                {
-                    bool selfWhite = movingPieceType <= 5;
-                    if (targetPieceType != -1)
-                    {
-                        bool targetWhite = targetPieceType <= 5;
-                        if (selfWhite == targetWhite) { errorMessage = "Cannot capture own piece."; return null; }
-                    }
-                }
-
-                ulong legalMoves = MoveGenerator.GetPseudoLegalMoves(fromIndex, movingPieceType, this);
-                if ((legalMoves & (1UL << toIndex)) == 0) { errorMessage = "Illegal Move (Geometry)."; return null; }
-
-                if (!IsMoveSafe(fromIndex, toIndex)) { errorMessage = "Illegal Move: King is in check."; return null; }
-
                 MakeMoveFast(fromIndex, toIndex);
 
-                char pieceChar = '?';
-                switch (movingPieceType)
-                {
-                    case 1: case 7: pieceChar = 'N'; break;
-                    case 2: case 8: pieceChar = 'B'; break;
-                    case 3: case 9: pieceChar = 'R'; break;
-                    case 4: case 10: pieceChar = 'Q'; break;
-                    case 5: case 11: pieceChar = 'K'; break;
-                    default: pieceChar = '?'; break;
-                }
+                char pieceChar = GetNotationChar(movingPieceType);
                 bool isPawn = (movingPieceType == 0 || movingPieceType == 6);
                 string prefix = isPawn ? "" : pieceChar.ToString();
-
                 string resultNotation;
                 if (movingPieceType == 5 && Math.Abs(toIndex - fromIndex) == 2) resultNotation = (toIndex == 6) ? "0-0" : "0-0-0";
                 else if (movingPieceType == 11 && Math.Abs(toIndex - fromIndex) == 2) resultNotation = (toIndex == 62) ? "0-0" : "0-0-0";
@@ -395,15 +449,8 @@ namespace StampedeChess.Core
                     string captureMark = isCapture ? "x" : "";
                     resultNotation = string.Format("{0}{1}{2}{3}", prefix, coordsOnly.Substring(0, 2), captureMark, coordsOnly.Substring(2, 2));
                 }
-
-                int enemyKingSq = GetKingSquare(IsWhiteToMove);
-                bool isCheck = IsSquareAttacked(enemyKingSq, !IsWhiteToMove);
-
-                if (isCheck)
-                {
-                    if (IsCheckmate()) { resultNotation += "#"; errorMessage = "GAME OVER"; }
-                    else { resultNotation += "+"; }
-                }
+                if (IsCheckmate()) { resultNotation += "#"; errorMessage = "GAME OVER"; }
+                else if (IsSquareAttacked(GetKingSquare(IsWhiteToMove), !IsWhiteToMove)) { resultNotation += "+"; }
 
                 MoveHistory.Add(resultNotation);
                 return resultNotation;
@@ -414,16 +461,12 @@ namespace StampedeChess.Core
         private bool IsMoveSafe(int from, int to)
         {
             bool wasWhiteTurn = IsWhiteToMove;
-            (int captured, int moved, int oldRights, int oldEP) = MakeMoveFast(from, to);
+            var undo = MakeMoveFast(from, to);
             int myKingSq = GetKingSquare(wasWhiteTurn);
             bool isSelfCheck = IsSquareAttacked(myKingSq, IsWhiteToMove);
-            UnmakeMoveFast(from, to, captured, moved, oldRights, oldEP);
+            UnmakeMoveFast(from, to, undo.captured, undo.moved, undo.oldRights, undo.oldEP, undo.oldHash);
             return !isSelfCheck;
         }
-
-        public ulong GetWhitePieces() => Bitboards[0] | Bitboards[1] | Bitboards[2] | Bitboards[3] | Bitboards[4] | Bitboards[5];
-        public ulong GetBlackPieces() => Bitboards[6] | Bitboards[7] | Bitboards[8] | Bitboards[9] | Bitboards[10] | Bitboards[11];
-        public ulong GetAllPieces() => GetWhitePieces() | GetBlackPieces();
 
         public void LoadPosition(string fen)
         {
@@ -456,28 +499,18 @@ namespace StampedeChess.Core
                 if (rights.Contains("q")) CastlingRights |= 8;
             }
             EnPassantTarget = -1;
-            if (sections.Length > 3 && sections[3] != "-")
-            {
-                EnPassantTarget = StringToIndex(sections[3]);
-            }
+            if (sections.Length > 3 && sections[3] != "-") EnPassantTarget = StringToIndex(sections[3]);
+
+            CurrentHash = 0;
+            if (IsWhiteToMove) CurrentHash ^= Zobrist.SideToMove;
+            CurrentHash ^= Zobrist.CastlingRights[CastlingRights];
+            int epFile = (EnPassantTarget == -1) ? 8 : (EnPassantTarget % 8);
+            CurrentHash ^= Zobrist.EnPassantFile[epFile];
+            for (int sq = 0; sq < 64; sq++) { int p = GetPieceAtSquare(sq); if (p != -1) CurrentHash ^= Zobrist.Pieces[p, sq]; }
         }
 
-        public int GetPieceAtSquare(int squareIndex)
-        {
-            for (int i = 0; i < 12; i++)
-            {
-                ulong bit = 1UL << squareIndex;
-                if ((Bitboards[i] & bit) != 0) return i;
-            }
-            return -1;
-        }
-
-        public int GetKingSquare(bool isWhite)
-        {
-            int kingType = isWhite ? 5 : 11;
-            ulong kingBitboard = Bitboards[kingType];
-            return TrailingZeroCount(kingBitboard);
-        }
+        public int GetPieceAtSquare(int squareIndex) { for (int i = 0; i < 12; i++) { if ((Bitboards[i] & (1UL << squareIndex)) != 0) return i; } return -1; }
+        public int GetKingSquare(bool isWhite) { int kingType = isWhite ? 5 : 11; return TrailingZeroCount(Bitboards[kingType]); }
 
         public bool IsSquareAttacked(int square, bool attackerIsWhite)
         {
@@ -494,65 +527,61 @@ namespace StampedeChess.Core
             if ((diagMoves & (enemyBishops | enemyQueens)) != 0) return true;
             ulong enemyPawns = attackerIsWhite ? Bitboards[0] : Bitboards[6];
             ulong pawnAttacks = 0;
-            if (attackerIsWhite)
-            {
-                if (square >= 8 && square % 8 != 0) pawnAttacks |= (1UL << (square - 9));
-                if (square >= 8 && square % 8 != 7) pawnAttacks |= (1UL << (square - 7));
-            }
-            else
-            {
-                if (square < 56 && square % 8 != 0) pawnAttacks |= (1UL << (square + 7));
-                if (square < 56 && square % 8 != 7) pawnAttacks |= (1UL << (square + 9));
-            }
+            if (attackerIsWhite) { if (square >= 8 && square % 8 != 0) pawnAttacks |= (1UL << (square - 9)); if (square >= 8 && square % 8 != 7) pawnAttacks |= (1UL << (square - 7)); }
+            else { if (square < 56 && square % 8 != 0) pawnAttacks |= (1UL << (square + 7)); if (square < 56 && square % 8 != 7) pawnAttacks |= (1UL << (square + 9)); }
             return (pawnAttacks & enemyPawns) != 0;
         }
 
-        public bool IsCheckmate()
-        {
-            bool isWhite = IsWhiteToMove;
-            int kingSquare = GetKingSquare(isWhite);
-            if (!IsSquareAttacked(kingSquare, !isWhite)) return false;
-            var moves = GetAllLegalMoves();
-            return moves.Count == 0;
+        public bool IsCheckmate() 
+        { 
+            int kingSquare = GetKingSquare(IsWhiteToMove); 
+            if (!IsSquareAttacked(kingSquare, !IsWhiteToMove)) 
+                return false; 
+            var moves = GetAllLegalMoves(); 
+            return moves.Count == 0; 
         }
-
-        public void MovePiece(int from, int to)
-        {
-            MakeMoveFast(from, to);
-        }
-
+        public ulong GetWhitePieces() => Bitboards[0] | Bitboards[1] | Bitboards[2] | Bitboards[3] | Bitboards[4] | Bitboards[5];
+        public ulong GetBlackPieces() => Bitboards[6] | Bitboards[7] | Bitboards[8] | Bitboards[9] | Bitboards[10] | Bitboards[11];
+        public ulong GetAllPieces() => GetWhitePieces() | GetBlackPieces();
         public string IndexToString(int index) => string.Format("{0}{1}", (char)('a' + (index % 8)), (char)('1' + (index / 8)));
         public int StringToIndex(string square) => (square[1] - '1') * 8 + (square[0] - 'a');
-        private int GetPieceTypeFromSymbol(char symbol)
-        {
-            switch (symbol)
-            {
-                case 'P': return 0;
-                case 'N': return 1;
-                case 'B': return 2;
-                case 'R': return 3;
-                case 'Q': return 4;
-                case 'K': return 5;
-                case 'p': return 6;
-                case 'n': return 7;
-                case 'b': return 8;
-                case 'r': return 9;
-                case 'q': return 10;
-                case 'k': return 11;
-                default: throw new Exception("Invalid Symbol");
-            }
+        private int GetPieceTypeFromSymbol(char symbol) 
+        { 
+            switch (symbol) 
+            { 
+                case 'P': return 0; 
+                case 'N': return 1; 
+                case 'B': return 2; 
+                case 'R': return 3; 
+                case 'Q': return 4; 
+                case 'K': return 5; 
+                case 'p': return 6; 
+                case 'n': return 7; 
+                case 'b': return 8; 
+                case 'r': return 9; 
+                case 'q': return 10; 
+                case 'k': return 11; 
+                default: 
+                    throw new Exception("Invalid Symbol"); 
+            } 
         }
-        private char GetNotationChar(int p)
+        private char GetNotationChar(int p) 
         {
-            switch (p)
-            {
-                case 1: case 7: return 'N';
-                case 2: case 8: return 'B';
-                case 3: case 9: return 'R';
-                case 4: case 10: return 'Q';
-                case 5: case 11: return 'K';
-                default: return '?';
-            }
+            switch (p) 
+            { 
+                case 1: case 7: 
+                    return 'N'; 
+                case 2: case 8: 
+                    return 'B'; 
+                case 3: case 9: 
+                    return 'R'; 
+                case 4: case 10: 
+                    return 'Q'; 
+                case 5: case 11: 
+                    return 'K'; 
+                default: 
+                    return '?'; 
+            } 
         }
     }
 }

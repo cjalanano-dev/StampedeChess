@@ -1,189 +1,408 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Diagnostics;
+using System.Linq;
 
 namespace StampedeChess.Core
 {
     public static class AI
     {
-        private const int SearchDepth = 3;
+        // settings for the bot
+        private const int MaxDepth = 64;
+        private const int TimeLimitMs = 2500; // think for 2.5 seconds
+        private const int NullMoveReduction = 2;
+
+        // diagnostics stuff
+        public static long NodesVisited;
+        private static Stopwatch _timer;
+        private static bool _abortSearch;
+
+        // heuristics to help us sort moves
+        private static int[,] _history;
+        private static int[,] _killers;
+        private const int MaxPly = 64;
+
+        // simple wrapper to sort moves with their scores
+        private struct MoveWrapper { public (int From, int To) Move; public int Score; }
 
         public static string GetBestMove(Board board)
         {
-            int bestVal = board.IsWhiteToMove ? int.MinValue : int.MaxValue;
+            // 1. opening book (deterministic)
+            // we check if we know the best theory move. if so, play it instantly.
+            string bookMove = OpeningBook.GetBookMove(board);
+            if (bookMove != null) return bookMove;
+
+            // 2. search
+            // if we are out of book, we have to think.
+            _timer = Stopwatch.StartNew();
+            _abortSearch = false;
+            NodesVisited = 0;
+
+            // reset tables
+            _history = new int[12, 64];
+            _killers = new int[MaxDepth, 2];
+
             (int From, int To) bestMove = (-1, -1);
+            int alpha = -50000;
+            int beta = 50000;
 
-            // Regular search for the root moves
-            var moves = board.GetAllLegalMoves(capturesOnly: false);
-            moves = OrderMoves(board, moves);
-
-            foreach (var move in moves)
+            // iterative deepening loop
+            // start at depth 1 and go deeper until we run out of time.
+            for (int depth = 1; depth <= MaxDepth; depth++)
             {
-                var undoInfo = board.MakeMoveFast(move.From, move.To);
-                if (undoInfo.moved == -1) continue;
+                (int From, int To) bestMoveThisDepth = (-1, -1);
+                int score = 0;
 
-                // We start the recursive Minimax
-                int moveVal = Minimax(board, SearchDepth - 1, int.MinValue, int.MaxValue, !board.IsWhiteToMove);
-
-                board.UnmakeMoveFast(move.From, move.To, undoInfo.captured, undoInfo.moved, undoInfo.oldRights, undoInfo.oldEP);
-
-                if (board.IsWhiteToMove)
+                try
                 {
-                    if (moveVal > bestVal) { bestVal = moveVal; bestMove = move; }
+                    // search using negamax
+                    score = Negamax(board, depth, alpha, beta, 0, allowNull: true);
+
+                    // grab the best move from the hash table
+                    if (TranspositionTable.Probe(board.CurrentHash, out var entry) && entry.BestMoveFrom != -1)
+                    {
+                        bestMoveThisDepth = (entry.BestMoveFrom, entry.BestMoveTo);
+                    }
                 }
-                else
+                catch (TimeoutException)
                 {
-                    if (moveVal < bestVal) { bestVal = moveVal; bestMove = move; }
+                    // time is up! stop searching.
+                    break;
                 }
+
+                if (_abortSearch) break;
+
+                // if we found a valid move, save it.
+                if (bestMoveThisDepth.From != -1) bestMove = bestMoveThisDepth;
+
+                // if we found checkmate, no need to search deeper. we already won.
+                if (Math.Abs(score) > 90000) break;
             }
+
+            _timer.Stop();
 
             if (bestMove.From == -1) return "resign";
             return board.IndexToString(bestMove.From) + board.IndexToString(bestMove.To);
         }
 
-        private static int Minimax(Board board, int depth, int alpha, int beta, bool isMaximizing)
+        private static int Negamax(Board board, int depth, int alpha, int beta, int ply, bool allowNull)
         {
-            // BASE CASE: If depth is 0, enter Quiescence Search instead of raw Evaluate()
-            if (depth == 0)
-                return QuiescenceSearch(board, alpha, beta, isMaximizing);
+            NodesVisited++;
 
-            var moves = board.GetAllLegalMoves(capturesOnly: false);
-
-            // Checkmate / Stalemate detection
-            if (moves.Count == 0)
+            // check time every 2048 nodes so we don't lag the cpu
+            if ((NodesVisited & 2047) == 0)
             {
-                if (board.IsCheckmate()) return isMaximizing ? -100000 + depth : 100000 - depth; // Prefer faster mates
-                return 0; // Stalemate
+                if (_timer.ElapsedMilliseconds > TimeLimitMs)
+                {
+                    _abortSearch = true;
+                    throw new TimeoutException();
+                }
             }
 
-            if (depth > 1) moves = OrderMoves(board, moves);
+            // safety check for max depth
+            if (ply >= MaxPly) return board.EvaluateInt();
 
-            if (isMaximizing)
+            bool isRoot = (ply == 0);
+            bool inCheck = board.IsSquareAttacked(board.GetKingSquare(board.IsWhiteToMove), !board.IsWhiteToMove);
+
+            // check extension
+            // if we are in check, we must search deeper to survive.
+            if (inCheck) depth++;
+
+            // transposition table probe
+            // have we seen this position before? if so, use the stored score.
+            int originalAlpha = alpha;
+            (int From, int To) ttMove = (-1, -1);
+            if (TranspositionTable.Probe(board.CurrentHash, out var ttEntry))
             {
-                int maxEval = int.MinValue;
-                foreach (var move in moves)
+                if (ttEntry.Depth >= depth && !isRoot)
                 {
-                    var undoInfo = board.MakeMoveFast(move.From, move.To);
-                    int eval = Minimax(board, depth - 1, alpha, beta, false);
-                    board.UnmakeMoveFast(move.From, move.To, undoInfo.captured, undoInfo.moved, undoInfo.oldRights, undoInfo.oldEP);
-
-                    maxEval = Math.Max(maxEval, eval);
-                    alpha = Math.Max(alpha, eval);
-                    if (beta <= alpha) break;
+                    if (ttEntry.Flag == TranspositionTable.Exact) return ttEntry.Score;
+                    if (ttEntry.Flag == TranspositionTable.LowerBound) alpha = Math.Max(alpha, ttEntry.Score);
+                    if (ttEntry.Flag == TranspositionTable.UpperBound) beta = Math.Min(beta, ttEntry.Score);
+                    if (alpha >= beta) return ttEntry.Score;
                 }
-                return maxEval;
+                ttMove = (ttEntry.BestMoveFrom, ttEntry.BestMoveTo);
             }
-            else
-            {
-                int minEval = int.MaxValue;
-                foreach (var move in moves)
-                {
-                    var undoInfo = board.MakeMoveFast(move.From, move.To);
-                    int eval = Minimax(board, depth - 1, alpha, beta, true);
-                    board.UnmakeMoveFast(move.From, move.To, undoInfo.captured, undoInfo.moved, undoInfo.oldRights, undoInfo.oldEP);
 
-                    minEval = Math.Min(minEval, eval);
-                    beta = Math.Min(beta, eval);
-                    if (beta <= alpha) break;
+            // quiescence search at the leaf nodes (avoids horizon effect)
+            if (depth <= 0) return Quiescence(board, alpha, beta);
+
+            // null move pruning
+            // try skipping our turn. if we still have a good score, the position is winning.
+            // don't do this if we are in check or only have pawns left.
+            if (allowNull && !inCheck && depth >= 3 && !isRoot && HasNonPawnMaterial(board))
+            {
+                int storedEP = board.EnPassantTarget;
+                ulong storedHash = board.CurrentHash;
+
+                // make null move
+                board.IsWhiteToMove = !board.IsWhiteToMove;
+                board.EnPassantTarget = -1;
+                board.CurrentHash ^= Zobrist.SideToMove;
+                if (storedEP != -1)
+                {
+                    board.CurrentHash ^= Zobrist.EnPassantFile[storedEP % 8];
+                    board.CurrentHash ^= Zobrist.EnPassantFile[8];
                 }
-                return minEval;
+
+                // search with reduced depth
+                int nullScore = -Negamax(board, depth - 1 - NullMoveReduction, -beta, -beta + 1, ply + 1, false);
+
+                // undo null move
+                board.IsWhiteToMove = !board.IsWhiteToMove;
+                board.EnPassantTarget = storedEP;
+                board.CurrentHash = storedHash;
+
+                if (_abortSearch) throw new TimeoutException();
+                if (nullScore >= beta) return beta; // cutoff
+            }
+
+            var rawMoves = board.GetAllLegalMoves(capturesOnly: false);
+
+            // game over detection
+            if (rawMoves.Count == 0)
+            {
+                if (inCheck) return -100000 + ply; // checkmate (sooner is better)
+                return 0; // stalemate
+            }
+
+            // sort moves to search best ones first
+            List<MoveWrapper> sortedMoves = ScoreMoves(board, rawMoves, ttMove, ply);
+            sortedMoves.Sort((a, b) => b.Score.CompareTo(a.Score));
+
+            int bestScore = -1000000;
+            (int From, int To) bestMoveInNode = (-1, -1);
+
+            for (int i = 0; i < sortedMoves.Count; i++)
+            {
+                var move = sortedMoves[i].Move;
+                var undo = board.MakeMoveFast(move.From, move.To);
+
+                bool isCapture = (undo.captured != -1);
+                bool givesCheck = board.IsSquareAttacked(board.GetKingSquare(board.IsWhiteToMove), !board.IsWhiteToMove);
+
+                // initialize score to keep compiler happy
+                int score = -50000;
+                bool needsFullSearch = true;
+
+                // lmr (late move reduction)
+                // if this move is late in the list and "quiet", we search it less deep.
+                if (depth >= 3 && i > 3 && !isCapture && !inCheck && !givesCheck && !isRoot)
+                {
+                    int reduction = 1;
+                    if (depth > 6) reduction = 2; // reduce more if we are really deep
+
+                    score = -Negamax(board, depth - 1 - reduction, -alpha - 1, -alpha, ply + 1, true);
+
+                    // if the reduced search found something interesting, we have to search fully.
+                    if (score > alpha) needsFullSearch = true;
+                    else needsFullSearch = false;
+                }
+
+                if (needsFullSearch)
+                {
+                    // pvs (principal variation search)
+                    // assume first move is best and search with full window.
+                    if (i == 0)
+                    {
+                        score = -Negamax(board, depth - 1, -beta, -alpha, ply + 1, true);
+                    }
+                    else
+                    {
+                        // for other moves, assume they are worse (null window search)
+                        score = -Negamax(board, depth - 1, -alpha - 1, -alpha, ply + 1, true);
+
+                        // if our assumption was wrong, search again fully.
+                        if (score > alpha && score < beta)
+                            score = -Negamax(board, depth - 1, -beta, -alpha, ply + 1, true);
+                    }
+                }
+
+                board.UnmakeMoveFast(move.From, move.To, undo.captured, undo.moved, undo.oldRights, undo.oldEP, undo.oldHash);
+
+                if (_abortSearch) throw new TimeoutException();
+
+                if (score > bestScore)
+                {
+                    bestScore = score;
+                    bestMoveInNode = move;
+                    if (score > alpha)
+                    {
+                        alpha = score;
+                        if (alpha >= beta)
+                        {
+                            // beta cutoff!
+                            // save the killer move if it wasn't a capture
+                            if (undo.captured == -1)
+                            {
+                                StoreKiller(ply, move);
+                                UpdateHistory(board, move, depth);
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+
+            // store result in transposition table
+            int flag = TranspositionTable.Exact;
+            if (bestScore <= originalAlpha) flag = TranspositionTable.UpperBound;
+            else if (bestScore >= beta) flag = TranspositionTable.LowerBound;
+
+            TranspositionTable.Store(board.CurrentHash, bestScore, depth, flag, bestMoveInNode.From, bestMoveInNode.To);
+
+            return bestScore;
+        }
+
+        // checks only captures to stop the engine from hanging pieces at the horizon
+        private static int Quiescence(Board board, int alpha, int beta)
+        {
+            NodesVisited++;
+
+            // stand pat (if we don't move, what is our score?)
+            int standPat = board.EvaluateInt();
+            if (standPat >= beta) return beta;
+            if (alpha < standPat) alpha = standPat;
+
+            var rawMoves = board.GetAllLegalMoves(capturesOnly: true);
+            var sortedMoves = ScoreMoves(board, rawMoves, (-1, -1), 0);
+            sortedMoves.Sort((a, b) => b.Score.CompareTo(a.Score));
+
+            foreach (var wrapper in sortedMoves)
+            {
+                var move = wrapper.Move;
+                var undo = board.MakeMoveFast(move.From, move.To);
+
+                int score = -Quiescence(board, -beta, -alpha);
+
+                board.UnmakeMoveFast(move.From, move.To, undo.captured, undo.moved, undo.oldRights, undo.oldEP, undo.oldHash);
+
+                if (score >= beta) return beta;
+                if (score > alpha) alpha = score;
+            }
+            return alpha;
+        }
+
+        // give moves a score so we can sort them
+        private static List<MoveWrapper> ScoreMoves(Board board, List<(int From, int To)> rawMoves, (int From, int To) ttBest, int ply)
+        {
+            var list = new List<MoveWrapper>(rawMoves.Count);
+            int killer1 = _killers[ply, 0];
+            int killer2 = _killers[ply, 1];
+
+            foreach (var move in rawMoves)
+            {
+                int score = 0;
+                int piece = board.GetPieceAtSquare(move.From);
+                int capture = board.GetPieceAtSquare(move.To);
+
+                if (move == ttBest) score = 2000000; // tt move is always first
+                else if (capture != -1)
+                {
+                    // mvv-lva (most valuable victim - least valuable aggressor)
+                    int victimVal = GetPieceValue(capture % 6);
+                    int attackerVal = GetPieceValue(piece % 6);
+                    score = 1000000 + (victimVal * 10) - attackerVal;
+                }
+                else
+                {
+                    // check killer moves and history
+                    int packed = PackMove(move);
+                    if (packed == killer1) score = 900000;
+                    else if (packed == killer2) score = 800000;
+                    else score = _history[piece, move.To];
+                }
+                list.Add(new MoveWrapper { Move = move, Score = score });
+            }
+            return list;
+        }
+
+        // save the move that caused a beta cutoff
+        private static void StoreKiller(int ply, (int From, int To) move)
+        {
+            if (ply >= MaxDepth) return;
+            int packed = PackMove(move);
+            if (_killers[ply, 0] != packed)
+            {
+                _killers[ply, 1] = _killers[ply, 0];
+                _killers[ply, 0] = packed;
             }
         }
 
-        // quiescence search added on dec 12, 10:45 PM by carlos :)
-        private static int QuiescenceSearch(Board board, int alpha, int beta, bool isMaximizing)
+        // give bonus to moves that are good in general
+        private static void UpdateHistory(Board board, (int From, int To) move, int depth)
         {
-            // stand_pat just means if i am already winning by a lot then i don't need to capture.
-            int stand_pat = (int)(board.Evaluate() * 100);
-
-            if (isMaximizing)
-            {
-                if (stand_pat >= beta) return beta;
-                if (stand_pat > alpha) alpha = stand_pat;
-            }
-            else
-            {
-                if (stand_pat <= alpha) return alpha;
-                if (stand_pat < beta) beta = stand_pat;
-            }
-
-            // only consider captures in quiescence search
-            var moves = board.GetAllLegalMoves(capturesOnly: true);
-            moves = OrderMoves(board, moves);
-
-            if (isMaximizing)
-            {
-                foreach (var move in moves)
-                {
-                    var undoInfo = board.MakeMoveFast(move.From, move.To);
-                    int eval = QuiescenceSearch(board, alpha, beta, false);
-                    board.UnmakeMoveFast(move.From, move.To, undoInfo.captured, undoInfo.moved, undoInfo.oldRights, undoInfo.oldEP);
-
-                    if (eval >= beta) return beta;
-                    if (eval > alpha) alpha = eval;
-                }
-                return alpha;
-            }
-            else
-            {
-                foreach (var move in moves)
-                {
-                    var undoInfo = board.MakeMoveFast(move.From, move.To);
-                    int eval = QuiescenceSearch(board, alpha, beta, true);
-                    board.UnmakeMoveFast(move.From, move.To, undoInfo.captured, undoInfo.moved, undoInfo.oldRights, undoInfo.oldEP);
-
-                    if (eval <= alpha) return alpha;
-                    if (eval < beta) beta = eval;
-                }
-                return beta;
-            }
+            int piece = board.GetPieceAtSquare(move.From);
+            if (_history[piece, move.To] < 100000)
+                _history[piece, move.To] += depth * depth;
         }
 
-        private static List<(int From, int To)> OrderMoves(Board board, List<(int From, int To)> moves)
-        {
-            // MVV-LVA (Most Valuable Victim - Least Valuable Aggressor) 
-            // these methods or algorithms are researched carefully using real sources,
-            // including chess programming wiki and youtube videos by top chess engine programmers.
-            moves.Sort((a, b) =>
-            {
-                int scoreA = 0;
-                int pieceA = board.GetPieceAtSquare(a.From) % 6; // 0-5 type
-                int targetA = board.GetPieceAtSquare(a.To);
-
-                if (targetA != -1)
-                {
-                    int victimVal = GetPieceValue(targetA % 6);
-                    int aggressorVal = GetPieceValue(pieceA);
-                    scoreA = 10 * victimVal - aggressorVal;
-                }
-
-                int scoreB = 0;
-                int pieceB = board.GetPieceAtSquare(b.From) % 6;
-                int targetB = board.GetPieceAtSquare(b.To);
-
-                if (targetB != -1)
-                {
-                    int victimVal = GetPieceValue(targetB % 6);
-                    int aggressorVal = GetPieceValue(pieceB);
-                    scoreB = 10 * victimVal - aggressorVal;
-                }
-
-                return scoreB.CompareTo(scoreA); // descending sort
-            });
-
-            return moves;
-        }
+        private static int PackMove((int From, int To) move) => (move.From << 6) | move.To;
 
         private static int GetPieceValue(int pieceType)
         {
             switch (pieceType)
             {
-                case 0: return 100; // Pawn
-                case 1: return 300; // Knight
-                case 2: return 310; // Bishop
-                case 3: return 500; // Rook
-                case 4: return 900; // Queen
-                case 5: return 20000; // King
+                case 0: return 100;
+                case 1: return 300;
+                case 2: return 310;
+                case 3: return 500;
+                case 4: return 900;
+                case 5: return 20000;
                 default: return 0;
+            }
+        }
+
+        // we flip the score here so negamax works for both sides
+        private static int EvaluateInt(this Board board)
+        {
+            int score = (int)(board.Evaluate() * 100);
+            return board.IsWhiteToMove ? score : -score;
+        }
+
+        // helper to check if we can do null move
+        private static bool HasNonPawnMaterial(Board board)
+        {
+            ulong myPieces = board.IsWhiteToMove ? board.GetWhitePieces() : board.GetBlackPieces();
+            ulong myPawns = board.IsWhiteToMove ? board.Bitboards[0] : board.Bitboards[6];
+            ulong myKing = board.IsWhiteToMove ? board.Bitboards[5] : board.Bitboards[11];
+            return (myPieces ^ myPawns ^ myKing) != 0;
+        }
+
+        // --- deterministic opening book ---
+        // we just hardcode the best theory moves so we don't blunder the opening
+        private static class OpeningBook
+        {
+            public static string GetBookMove(Board board)
+            {
+                if (board.MoveHistory.Count > 10) return null; // out of book
+
+                // clean up the history string
+                string line = string.Join(" ", board.MoveHistory.Select(m => Clean(m))).Trim();
+
+                // white (start) - always e4
+                if (string.IsNullOrEmpty(line)) return "e2e4";
+
+                // black response to e4 - always sicilian (best stats)
+                if (line == "e2e4") return "c7c5";
+
+                // black response to d4 - always d5 (solid)
+                if (line == "d2d4") return "d7d5";
+
+                // white response to sicilian - open sicilian
+                if (line == "e2e4 c7c5") return "g1f3";
+
+                // white response to queen's gambit - c4
+                if (line == "d2d4 d7d5") return "c2c4";
+
+                return null;
+            }
+
+            private static string Clean(string notation)
+            {
+                // strips special chars so "e2e4x" matches "e2e4"
+                return new string(notation.Where(c => char.IsLetterOrDigit(c)).ToArray()).Substring(0, 4);
             }
         }
     }

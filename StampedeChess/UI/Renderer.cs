@@ -14,9 +14,9 @@ namespace StampedeChess.UI
             var table = new Table();
             table.Border(TableBorder.None);
             table.HideHeaders();
-            table.Centered().Expand();
+            table.Centered();
 
-            table.AddColumn(new TableColumn("Rank").Centered().Padding(25,0,0,0));
+            table.AddColumn(new TableColumn("Rank").Centered().Padding(0, 0));
             for (int i = 0; i < 8; i++)
             {
                 table.AddColumn(new TableColumn("File").Centered().Padding(0, 0));
