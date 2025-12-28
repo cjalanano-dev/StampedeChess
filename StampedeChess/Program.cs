@@ -24,7 +24,6 @@ namespace StampedeChess
                 switch (selectedOption)
                 {
                     case "Start": RunGame(); break;
-                    case "Options": RunOptions(); break;
                     case "Exit": appRunning = false; break;
                 }
             }
@@ -35,7 +34,7 @@ namespace StampedeChess
 
         static string RunMenu()
         {
-            string[] options = { "Start", "Options", "Exit" };
+            string[] options = { "Start", "Exit" };
             int selectedIndex = 0;
             string titleArt = @"
 ███████╗████████╗ █████╗ ███╗   ███╗██████╗ ███████╗██████╗ ███████╗
@@ -53,9 +52,10 @@ namespace StampedeChess
                 AnsiConsole.Clear();
                 var logo = new Text(titleArt, new Style(Color.Cyan1)).Centered();
                 var splashText = new Text(currentSplash, new Style(Color.Yellow, decoration: Decoration.Bold)).Centered();
+                AnsiConsole.Write(new Text("\n\n\n\n"));
                 AnsiConsole.Write(logo);
                 AnsiConsole.Write(splashText);
-                AnsiConsole.Write(new Text("\n\n"));
+                AnsiConsole.Write(new Text("\n\n\n\n"));
 
                 var menuGrid = new Grid().Centered();
                 menuGrid.AddColumn();
@@ -78,9 +78,18 @@ namespace StampedeChess
                 AnsiConsole.Write(new Align(new Panel(menuGrid).Border(BoxBorder.None), HorizontalAlignment.Center));
 
                 ConsoleKeyInfo keyInfo = Console.ReadKey(true);
-                if (keyInfo.Key == ConsoleKey.UpArrow || keyInfo.Key == ConsoleKey.W) { selectedIndex--; if (selectedIndex < 0) selectedIndex = options.Length - 1; }
-                else if (keyInfo.Key == ConsoleKey.DownArrow || keyInfo.Key == ConsoleKey.S) { selectedIndex++; if (selectedIndex >= options.Length) selectedIndex = 0; }
-                else if (keyInfo.Key == ConsoleKey.Enter) return options[selectedIndex];
+                if (keyInfo.Key == ConsoleKey.UpArrow || keyInfo.Key == ConsoleKey.W) 
+                {
+                    selectedIndex--; 
+                    if (selectedIndex < 0) selectedIndex = options.Length - 1;
+                }
+                else if (keyInfo.Key == ConsoleKey.DownArrow || keyInfo.Key == ConsoleKey.S) 
+                { 
+                    selectedIndex++; 
+                    if (selectedIndex >= options.Length) selectedIndex = 0;
+                }
+                else if (keyInfo.Key == ConsoleKey.Enter) 
+                    return options[selectedIndex];
             }
         }
 
@@ -212,9 +221,20 @@ namespace StampedeChess
         {
             string title = isPlayerWin ? "VICTORY" : "DEFEAT";
             var titleColor = isPlayerWin ? Color.Gold1 : Color.Red;
-            string subText = isPlayerWin
-                ? "[bold gold1]CHECKMATE! YOU WON![/]"
-                : "[bold red]CHECKMATE! ENGINE WINS![/]";
+
+            string subText;
+            if (result.ToLower().Contains("resign"))
+            {
+                subText = isPlayerWin
+                    ? "[bold gold1]OPPONENT RESIGNED[/]"
+                    : "[bold red]YOU RESIGNED[/]";
+            }
+            else
+            {
+                subText = isPlayerWin
+                    ? "[bold gold1]CHECKMATE! YOU WON![/]"
+                    : "[bold red]CHECKMATE! ENGINE WINS![/]";
+            }
 
             // results layout
             var layout = new Layout("GameOver")
@@ -231,7 +251,7 @@ namespace StampedeChess
             // final board state
             var visualBoard = Renderer.GetVisualBoard(board);
             var boardPanel = new Panel(Align.Center(visualBoard, VerticalAlignment.Middle))
-                .Header("Final Position", Justify.Center)
+                .Header("Final Position", Justify.Left)
                 .Border(BoxBorder.Heavy)
                 .Expand();
 
@@ -263,14 +283,16 @@ namespace StampedeChess
             Console.ReadKey(true);
         }
 
-        static void RunOptions()
-        {
-            Console.Clear();
-            Console.WriteLine("\n   [ OPTIONS ]");
-            Console.WriteLine("   1. Search Depth: 3 (Fixed)");
-            Console.WriteLine("   2. Play as: White");
-            Console.WriteLine("\n   Press any key to return...");
-            Console.ReadKey(true);
-        }
+
+        // placeholder for future options menu
+        //static void RunOptions()
+        //{
+        //    Console.Clear();
+        //    Console.WriteLine("\n   [ OPTIONS ]");
+        //    Console.WriteLine("   1. Search Depth: 3 (Fixed)");
+        //    Console.WriteLine("   2. Play as: White");
+        //    Console.WriteLine("\n   Press any key to return...");
+        //    Console.ReadKey(true);
+        //}
     }
 }

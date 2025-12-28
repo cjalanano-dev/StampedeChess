@@ -29,7 +29,7 @@ namespace StampedeChess.UI
             // contents
             var evalPanel = Renderer.GetEvaluationBar(score);
 
-            string headerText = string.IsNullOrEmpty(statusIcon) ? "Stampede Engine" : $"Stampede Engine {statusIcon}";
+            string headerText = string.IsNullOrEmpty(statusIcon) ? "Stampede" : $"{statusIcon} Stampede {statusIcon}";
             var boardPanel = new Panel(Align.Center(boardVisual, VerticalAlignment.Middle))
                 .Header(headerText, Justify.Center)
                 .Border(BoxBorder.Heavy)
