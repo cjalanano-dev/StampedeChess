@@ -33,9 +33,6 @@
     <WarningLevel>4</WarningLevel>
   </PropertyGroup>
   <ItemGroup>
-    <Reference Include="ChessDotNet, Version=0.12.3.0, Culture=neutral, processorArchitecture=MSIL">
-      <HintPath>..\packages\ChessDotNet.1.0.0\lib\netstandard1.3\ChessDotNet.dll</HintPath>
-    </Reference>
     <Reference Include="Microsoft.Win32.Primitives, Version=4.0.2.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a, processorArchitecture=MSIL">
       <HintPath>..\packages\Microsoft.Win32.Primitives.4.3.0\lib\net46\Microsoft.Win32.Primitives.dll</HintPath>
       <Private>True</Private>
@@ -207,11 +204,8 @@
     <Compile Include="UI\PieceArt.cs" />
     <Compile Include="UI\Renderer.cs" />
   </ItemGroup>
-  <ItemGroup>
+  <ItemGroup> 
     <None Include="App.config" />
-    <None Include="komodo.bin">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </None>
     <None Include="packages.config" />
   </ItemGroup>
   <ItemGroup />

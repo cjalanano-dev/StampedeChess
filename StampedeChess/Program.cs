@@ -78,9 +78,18 @@ namespace StampedeChess
                 AnsiConsole.Write(new Align(new Panel(menuGrid).Border(BoxBorder.None), HorizontalAlignment.Center));
 
                 ConsoleKeyInfo keyInfo = Console.ReadKey(true);
-                if (keyInfo.Key == ConsoleKey.UpArrow || keyInfo.Key == ConsoleKey.W) { selectedIndex--; if (selectedIndex < 0) selectedIndex = options.Length - 1; }
-                else if (keyInfo.Key == ConsoleKey.DownArrow || keyInfo.Key == ConsoleKey.S) { selectedIndex++; if (selectedIndex >= options.Length) selectedIndex = 0; }
-                else if (keyInfo.Key == ConsoleKey.Enter) return options[selectedIndex];
+                if (keyInfo.Key == ConsoleKey.UpArrow || keyInfo.Key == ConsoleKey.W) 
+                {
+                    selectedIndex--; 
+                    if (selectedIndex < 0) selectedIndex = options.Length - 1;
+                }
+                else if (keyInfo.Key == ConsoleKey.DownArrow || keyInfo.Key == ConsoleKey.S) 
+                { 
+                    selectedIndex++; 
+                    if (selectedIndex >= options.Length) selectedIndex = 0;
+                }
+                else if (keyInfo.Key == ConsoleKey.Enter) 
+                    return options[selectedIndex];
             }
         }
 

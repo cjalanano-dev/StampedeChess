@@ -8,8 +8,8 @@ namespace StampedeChess.Core
     public static class AI
     {
         // settings for the bot
-        private const int MaxDepth = 64;
-        private const int TimeLimitMs = 2500; // think for 2.5 seconds
+        private const int MaxDepth = 63;
+        private const int TimeLimitMs = 2500;
         private const int NullMoveReduction = 2;
 
         // diagnostics stuff
@@ -17,22 +17,25 @@ namespace StampedeChess.Core
         private static Stopwatch _timer;
         private static bool _abortSearch;
 
-        // heuristics to help us sort moves
+        // things that help sort moves
         private static int[,] _history;
         private static int[,] _killers;
         private const int MaxPly = 64;
 
         // simple wrapper to sort moves with their scores
-        private struct MoveWrapper { public (int From, int To) Move; public int Score; }
+        private struct MoveWrapper 
+        { 
+            public (int From, int To) Move; 
+            public int Score; 
+        }
 
         public static string GetBestMove(Board board)
         {
-            // 1. opening book (deterministic)
+            // we do a deterministic opening book first
             // we check if we know the best theory move. if so, play it instantly.
             string bookMove = OpeningBook.GetBookMove(board);
             if (bookMove != null) return bookMove;
 
-            // 2. search
             // if we are out of book, we have to think.
             _timer = Stopwatch.StartNew();
             _abortSearch = false;
@@ -81,7 +84,10 @@ namespace StampedeChess.Core
 
             _timer.Stop();
 
-            if (bestMove.From == -1) return "resign";
+            if (bestMove.From == -1)
+            {
+                return "resign";
+            }
             return board.IndexToString(bestMove.From) + board.IndexToString(bestMove.To);
         }
 
@@ -260,7 +266,7 @@ namespace StampedeChess.Core
         {
             NodesVisited++;
 
-            // stand pat (if we don't move, what is our score?)
+            // stand pat, means we do nothing and just evaluate the position
             int standPat = board.EvaluateInt();
             if (standPat >= beta) return beta;
             if (alpha < standPat) alpha = standPat;
@@ -378,7 +384,7 @@ namespace StampedeChess.Core
             {
                 if (board.MoveHistory.Count > 10) return null; // out of book
 
-                // clean up the history string
+                // clean up the history string  
                 string line = string.Join(" ", board.MoveHistory.Select(m => Clean(m))).Trim();
 
                 // white (start) - always e4

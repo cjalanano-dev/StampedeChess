@@ -4,8 +4,6 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 
-         // Transposition table implementation would go here
-        // This is typically used in chess engines to store previously computed positions
 namespace StampedeChess.Core
     { 
 
